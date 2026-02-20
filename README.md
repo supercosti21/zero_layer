@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.png" alt="Zero Layer" width="200">
+</p>
+
 # Zero Layer (ZL)
 
 **Universal Linux package manager with native binary translation.**
