@@ -4,7 +4,7 @@ use crate::paths::ZlPaths;
 use crate::plugin::PluginRegistry;
 use crate::system::SystemProfile;
 
-use super::{InstallArgs, RemoveArgs, UpdateArgs};
+use super::{RemoveArgs, UpdateArgs};
 
 pub fn handle(
     args: UpdateArgs,
@@ -19,7 +19,7 @@ pub fn handle(
         Some(ref name) => {
             let pkg = db
                 .get_package_by_name(name)?
-                .ok_or_else(|| ZlError::PackageNotFound(name.clone()))?;
+                .ok_or_else(|| ZlError::PackageNotFound { name: name.clone() })?;
             vec![pkg]
         }
         None => db.list_packages()?,
@@ -38,8 +38,21 @@ pub fn handle(
     }
 
     let mut updated = 0;
+    let mut skipped_pinned = 0;
 
     for pkg in &packages {
+        // Only update explicitly installed packages
+        if !pkg.explicit {
+            continue;
+        }
+
+        // Skip pinned packages
+        if db.is_pinned(&pkg.id.name)? {
+            tracing::info!("{} is pinned, skipping update", pkg.id.name);
+            skipped_pinned += 1;
+            continue;
+        }
+
         // Find the plugin that manages this package
         let source_name = pkg.id.source.split('/').next().unwrap_or(&pkg.id.source);
         let plugin = match registry.get(source_name) {
@@ -65,13 +78,11 @@ pub fn handle(
                 };
                 super::remove::handle(remove_args, paths, db, true)?;
 
-                // Install new version
-                let install_args = InstallArgs {
-                    package: pkg.id.name.clone(),
-                    from: Some(source_name.to_string()),
-                    version: Some(candidate.version.clone()),
-                };
-                super::install::handle(install_args, paths, db, registry, profile, true)?;
+                // Install new version directly (skip dep resolution for updates)
+                super::install::install_single_package(
+                    &candidate, true, // maintain explicit status
+                    paths, db, plugin, profile,
+                )?;
 
                 updated += 1;
             }
@@ -88,6 +99,10 @@ pub fn handle(
         println!("All packages are up to date.");
     } else {
         println!("\n{} package(s) updated.", updated);
+    }
+
+    if skipped_pinned > 0 {
+        println!("{} pinned package(s) skipped.", skipped_pinned);
     }
 
     Ok(())

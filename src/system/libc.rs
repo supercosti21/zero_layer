@@ -94,9 +94,7 @@ fn extract_glibc_version(line: &str) -> Option<String> {
 
 /// Try to get musl version. Musl's linker prints version info when run directly.
 fn detect_musl_version(interp_path: &str) -> Option<String> {
-    let output = std::process::Command::new(interp_path)
-        .output()
-        .ok()?;
+    let output = std::process::Command::new(interp_path).output().ok()?;
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     for line in stderr.lines() {

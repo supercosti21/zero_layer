@@ -14,13 +14,15 @@ Install packages from any source — pacman, apt, rpm, AppImage, GitHub releases
 zl install firefox --from pacman
 ```
 
-1. **Download** the package from the selected source (Arch repos, Debian repos, GitHub, etc.)
-2. **Analyze** all ELF binaries — detect interpreters, shared library dependencies, RPATH/RUNPATH
-3. **Patch** binaries — set the correct dynamic linker and RUNPATH for the target system
-4. **Remap** hardcoded FHS paths (`/usr/lib`, `/usr/bin`, `/etc`) to ZL-managed directories
-5. **Patch** scripts and config files, rewriting shebangs and embedded paths
-6. **Track** every file in a dependency graph and persistent database
-7. **Verify** that all ELF binaries can resolve their dependencies post-install
+1. **Resolve** dependencies recursively — find all transitive deps from the source
+2. **Check for conflicts** — file ownership, binary names, library sonames, version constraints
+3. **Download** all packages in parallel (up to 4 concurrent) with progress bars and retry
+4. **Analyze** all ELF binaries — detect interpreters, shared library dependencies, RPATH/RUNPATH
+5. **Patch** binaries — set the correct dynamic linker and RUNPATH for the target system
+6. **Remap** hardcoded FHS paths (`/usr/lib`, `/usr/bin`, `/etc`) to ZL-managed directories
+7. **Install** with atomic transactions — automatic rollback if anything fails
+8. **Track** every file in a persistent database with dependency relationships
+9. **Verify** that all ELF binaries can resolve their dependencies post-install
 
 All translation happens at install time. Once installed, a package runs with zero overhead.
 
@@ -43,22 +45,86 @@ Add ZL's bin directory to your PATH:
 export PATH="$HOME/.local/share/zl/bin:$PATH"
 ```
 
-## Usage
+Enable shell completions:
 
 ```bash
-zl install <package>              # Install a package
+# Bash: add to ~/.bashrc
+eval "$(zl completions bash)"
+
+# Zsh: add to ~/.zshrc
+eval "$(zl completions zsh)"
+
+# Fish: run once
+zl completions fish > ~/.config/fish/completions/zl.fish
+```
+
+## Usage
+
+### Install & Remove
+
+```bash
+zl install <package>              # Install a package (resolves all dependencies)
 zl install <package> --from pacman # Install from a specific source
 zl install <package> --version 1.0 # Install a specific version
 zl remove <package>                # Remove a package
 zl remove <package> --cascade      # Remove package and orphaned deps
-zl search <query>                  # Search for packages
-zl search <query> --from pacman    # Search a specific source
-zl update                          # Update all packages
-zl update <package>                # Update a specific package
-zl list                            # List installed packages
 ```
 
-Global flags:
+### Search & Info
+
+```bash
+zl search <query>                  # Search for packages
+zl search <query> --from pacman    # Search a specific source
+zl info <package>                  # Detailed info about an installed package
+```
+
+### Update
+
+```bash
+zl update                          # Update all packages (respects pinned)
+zl update <package>                # Update a specific package
+```
+
+### List
+
+```bash
+zl list                            # List all installed packages
+zl list --explicit                 # Only explicitly installed packages
+zl list --deps                     # Only packages installed as dependencies
+zl list --orphans                  # Show orphaned dependencies
+```
+
+### Package Pinning
+
+```bash
+zl pin <package>                   # Pin a package (prevent updates)
+zl unpin <package>                 # Unpin a package (allow updates)
+```
+
+### Cache Management
+
+```bash
+zl cache list                      # Show cached downloads and sizes
+zl cache clean                     # Remove all cached files
+```
+
+### Lockfile Export/Import
+
+```bash
+zl export                          # Export to zl-lock.json
+zl export mypackages.json          # Export to custom file
+zl import zl-lock.json             # Show packages to install from lockfile
+```
+
+### Shell Completions
+
+```bash
+zl completions bash                # Generate bash completions
+zl completions zsh                 # Generate zsh completions
+zl completions fish                # Generate fish completions
+```
+
+### Global Flags
 
 ```bash
 zl -v ...    # Verbose output
@@ -108,10 +174,95 @@ ZL auto-detects the host system at startup — no manual configuration needed. I
 
 This means ZL works on any Linux distro without hardcoded assumptions: Arch, Ubuntu, Fedora, Alpine (musl), NixOS, Void, Gentoo, Clear Linux, Termux on Android, and more.
 
+### Automatic Dependency Resolution
+
+When you install a package, ZL automatically resolves and installs all dependencies:
+
+```
+$ zl install firefox
+Syncing package database from Arch Linux (pacman)...
+Resolving dependencies...
+Checking for conflicts...
+
+Dependencies to install (12):
+  dbus-glib 0.112-3 (0.4 MB)
+  gtk3 3.24.39-1 (23.1 MB)
+  libxt 1.3.0-1 (0.3 MB)
+  ...
+
+Packages to install (1):
+  firefox 120.0-1 (238.0 MB)
+
+Total installed size: 285.4 MB
+
+Proceed with installation? [Y/n]
+
+Downloading 13 package(s)...
+  [==========>                    ] 5/13 downloads
+    gtk3 downloaded
+    dbus-glib downloaded
+  ...
+
+[1/13] Installing dbus-glib...
+[2/13] Installing gtk3...
+...
+[13/13] Installing firefox...
+
+Installed 1 package(s) + 12 dependency(ies).
+```
+
+Dependencies are downloaded in parallel (up to 4 at a time) with progress bars and installed in correct dependency order. Virtual packages (e.g., `sh` provided by `bash`) are resolved automatically.
+
+### Conflict Detection
+
+Before installing, ZL checks for 5 types of conflicts:
+
+1. **File ownership** — detects if any file would overwrite a file from another package
+2. **Binary name** — detects if two packages provide the same executable name
+3. **Library soname** — detects if two packages provide the same shared library
+4. **Declared conflicts** — respects `conflicts` declarations from package metadata
+5. **Version constraints** — detects incompatible version requirements (e.g., pkg A needs glibc>=2.34 but glibc 2.17 is installed)
+
+### Atomic Transactions
+
+Every install is wrapped in a transaction. If any package fails to install:
+- All files, symlinks, and directories created during the install are removed
+- All database entries are rolled back
+- The system is left in its pre-install state
+
+### Package Pinning
+
+Pin packages to prevent them from being updated:
+
+```bash
+$ zl pin firefox
+Pinned firefox-120.0 (will not be updated).
+
+$ zl update
+All packages are up to date.
+1 pinned package(s) skipped.
+
+$ zl unpin firefox
+Unpinned firefox (updates allowed).
+```
+
+### Source Build Support
+
+ZL can build packages from source when precompiled binaries aren't available. It auto-detects the build system:
+
+- **Autotools** — `./configure && make && make install`
+- **CMake** — `cmake -B build && cmake --build build`
+- **Meson** — `meson setup build && ninja -C build`
+- **Cargo** — `cargo build --release` (Rust projects)
+- **Make** — simple Makefile projects
+
 ### Key Design Choices
 
 - **Pure Rust, single binary** — no C dependencies, no dynamic linking required
 - **Dynamic system detection** — all paths and interpreters auto-detected, never hardcoded
+- **Parallel downloads** — up to 4 concurrent downloads with progress bars and exponential backoff retry
+- **Atomic transactions** — all installs can be rolled back on failure
+- **5-way conflict detection** — prevents broken installs before they happen
 - **ELF patching with `elb`** — pure-Rust patchelf alternative, sets interpreter and RUNPATH
 - **RUNPATH over RPATH** — modern standard, respects `LD_LIBRARY_PATH`
 - **`redb` database** — pure-Rust embedded key-value store (ACID, no SQLite/C dependency)
@@ -144,7 +295,7 @@ repos = ["core", "extra"]
 
 ```bash
 cargo build              # Build
-cargo test               # Run all tests
+cargo test               # Run all tests (64 tests)
 cargo test <name>        # Run a single test
 cargo clippy             # Lint
 cargo fmt                # Format

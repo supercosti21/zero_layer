@@ -2,10 +2,10 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use crate::core::elf::analysis;
-use crate::error::{ZlError, ZlResult};
+use crate::error::{ZlError, ZlResult, retry_with_backoff};
 use crate::plugin::{ExtractedPackage, PackageCandidate};
 
-/// Download a pacman package file to the cache directory
+/// Download a pacman package file to the cache directory with retry
 pub fn download(candidate: &PackageCandidate, dest_dir: &Path) -> ZlResult<PathBuf> {
     let filename = candidate
         .download_url
@@ -14,41 +14,94 @@ pub fn download(candidate: &PackageCandidate, dest_dir: &Path) -> ZlResult<PathB
         .unwrap_or("package.pkg.tar.zst");
     let dest_path = dest_dir.join(filename);
 
-    // Skip download if already cached
+    // Skip download if already cached and checksum matches
     if dest_path.exists() {
-        tracing::debug!("Using cached {}", dest_path.display());
-        return Ok(dest_path);
+        if let Some(ref expected_sha256) = candidate.checksum {
+            if verify_checksum(&dest_path, expected_sha256) {
+                tracing::debug!("Using cached {} (checksum OK)", dest_path.display());
+                return Ok(dest_path);
+            }
+            tracing::debug!("Cached file has wrong checksum, re-downloading");
+            std::fs::remove_file(&dest_path)?;
+        } else {
+            tracing::debug!("Using cached {}", dest_path.display());
+            return Ok(dest_path);
+        }
     }
 
     tracing::info!("Downloading {}", candidate.download_url);
 
-    let response = reqwest::blocking::get(&candidate.download_url)?;
-    if !response.status().is_success() {
-        return Err(ZlError::Plugin {
-            plugin: "pacman".into(),
-            message: format!("HTTP {} downloading {}", response.status(), candidate.download_url),
-        });
-    }
+    let url = candidate.download_url.clone();
+    let expected_checksum = candidate.checksum.clone();
 
-    let bytes = response.bytes()?;
+    let bytes = retry_with_backoff(3, 1000, |attempt| {
+        if attempt > 1 {
+            tracing::info!("Download attempt {}/3 for {}", attempt, filename);
+        }
 
-    // Verify checksum if available
-    if let Some(ref expected_sha256) = candidate.checksum {
-        use sha2::{Digest, Sha256};
-        let actual = format!("{:x}", Sha256::digest(&bytes));
-        if actual != *expected_sha256 {
-            return Err(ZlError::Plugin {
-                plugin: "pacman".into(),
-                message: format!(
-                    "SHA256 mismatch for {}: expected {}, got {}",
-                    filename, expected_sha256, actual
-                ),
+        let response = reqwest::blocking::Client::new()
+            .get(&url)
+            .timeout(std::time::Duration::from_secs(300))
+            .send()
+            .map_err(|e| {
+                if e.is_timeout() {
+                    ZlError::Timeout {
+                        url: url.clone(),
+                        timeout_secs: 300,
+                    }
+                } else {
+                    ZlError::DownloadFailed {
+                        url: url.clone(),
+                        attempts: attempt,
+                        message: e.to_string(),
+                    }
+                }
+            })?;
+
+        if !response.status().is_success() {
+            return Err(ZlError::DownloadFailed {
+                url: url.clone(),
+                attempts: attempt,
+                message: format!("HTTP {}", response.status()),
             });
         }
-    }
+
+        let bytes = response.bytes().map_err(|e| ZlError::DownloadFailed {
+            url: url.clone(),
+            attempts: attempt,
+            message: format!("Failed to read response body: {}", e),
+        })?;
+
+        // Verify checksum if available
+        if let Some(ref expected_sha256) = expected_checksum {
+            use sha2::{Digest, Sha256};
+            let actual = format!("{:x}", Sha256::digest(&bytes));
+            if actual != *expected_sha256 {
+                return Err(ZlError::ChecksumMismatch {
+                    path: dest_path.clone(),
+                    expected: expected_sha256.clone(),
+                    actual,
+                });
+            }
+        }
+
+        Ok(bytes)
+    })?;
 
     std::fs::write(&dest_path, &bytes)?;
     Ok(dest_path)
+}
+
+/// Verify SHA256 checksum of an existing file
+fn verify_checksum(path: &Path, expected: &str) -> bool {
+    use sha2::{Digest, Sha256};
+    match std::fs::read(path) {
+        Ok(bytes) => {
+            let actual = format!("{:x}", Sha256::digest(&bytes));
+            actual == expected
+        }
+        Err(_) => false,
+    }
 }
 
 /// Extract a .pkg.tar.zst archive and classify its contents
@@ -93,7 +146,13 @@ pub fn extract(archive_path: &Path, metadata: PackageCandidate) -> ZlResult<Extr
 
         // Skip pacman metadata files
         let name = entry.file_name().to_string_lossy();
-        if name.starts_with('.') && (name == ".PKGINFO" || name == ".MTREE" || name == ".BUILDINFO" || name == ".INSTALL" || name == ".CHANGELOG") {
+        if name.starts_with('.')
+            && (name == ".PKGINFO"
+                || name == ".MTREE"
+                || name == ".BUILDINFO"
+                || name == ".INSTALL"
+                || name == ".CHANGELOG")
+        {
             continue;
         }
 
@@ -130,7 +189,8 @@ fn merge_pkginfo(mut candidate: PackageCandidate, content: &str) -> PackageCandi
                 "pkgdesc" => candidate.description = value.trim().to_string(),
                 "arch" => candidate.arch = value.trim().to_string(),
                 "size" => {
-                    candidate.installed_size = value.trim().parse().unwrap_or(candidate.installed_size);
+                    candidate.installed_size =
+                        value.trim().parse().unwrap_or(candidate.installed_size);
                 }
                 "depend" => {
                     let dep = value.trim().to_string();
@@ -162,7 +222,10 @@ fn is_script_file(path: &Path) -> bool {
     // Check extension
     if let Some(ext) = path.extension() {
         let ext = ext.to_string_lossy();
-        if matches!(ext.as_ref(), "sh" | "bash" | "py" | "pl" | "rb" | "lua" | "fish") {
+        if matches!(
+            ext.as_ref(),
+            "sh" | "bash" | "py" | "pl" | "rb" | "lua" | "fish"
+        ) {
             return true;
         }
     }

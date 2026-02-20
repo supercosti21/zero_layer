@@ -80,6 +80,36 @@ impl PacmanPlugin {
         }
         None
     }
+
+    /// Find a package that provides a given virtual package name.
+    /// Pacman provides entries can include version constraints (e.g., "sh=5.2"),
+    /// so we strip those before matching.
+    fn find_by_provides(&self, name: &str) -> Option<(String, DbEntry)> {
+        let cache = self.db_cache.read().unwrap();
+
+        for (repo, entries) in cache.iter() {
+            for entry in entries {
+                for prov in &entry.provides {
+                    let prov_name = strip_version_constraint(prov);
+                    if prov_name == name {
+                        return Some((repo.clone(), entry.clone()));
+                    }
+                }
+            }
+        }
+        None
+    }
+}
+
+/// Strip version constraint from a dependency/provides string.
+/// "glibc>=2.33" -> "glibc", "sh=5.2" -> "sh", "openssl" -> "openssl"
+fn strip_version_constraint(s: &str) -> &str {
+    for (i, c) in s.char_indices() {
+        if c == '>' || c == '<' || c == '=' || c == ':' {
+            return &s[..i];
+        }
+    }
+    s
 }
 
 impl SourcePlugin for PacmanPlugin {
@@ -139,13 +169,22 @@ impl SourcePlugin for PacmanPlugin {
     }
 
     fn resolve(&self, name: &str, version: Option<&str>) -> ZlResult<Option<PackageCandidate>> {
-        match self.find_in_db(name, version) {
-            Some((repo, entry)) => {
-                let mirror = self.primary_mirror()?;
-                Ok(Some(database::entry_to_candidate(&entry, mirror, &repo)))
-            }
-            None => Ok(None),
+        // First try exact name match
+        if let Some((repo, entry)) = self.find_in_db(name, version) {
+            let mirror = self.primary_mirror()?;
+            return Ok(Some(database::entry_to_candidate(&entry, mirror, &repo)));
         }
+
+        // Fall back to checking provides (virtual packages)
+        if version.is_none() {
+            if let Some((repo, entry)) = self.find_by_provides(name) {
+                let mirror = self.primary_mirror()?;
+                tracing::debug!("Resolved '{}' via provides from '{}'", name, entry.name);
+                return Ok(Some(database::entry_to_candidate(&entry, mirror, &repo)));
+            }
+        }
+
+        Ok(None)
     }
 
     fn download(&self, candidate: &PackageCandidate, dest_dir: &Path) -> ZlResult<PathBuf> {

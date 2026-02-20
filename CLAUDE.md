@@ -30,20 +30,22 @@ cargo fmt -- --check     # Check formatting without modifying files
 
 ### How it works (install flow)
 1. **Detect system** — auto-detect arch, interpreter, libc, lib dirs, layout (SystemProfile)
-2. Download package from selected source
-3. Analyze all ELF binaries with `goblin`
-4. Patch binaries with `elb` (interpreter, RUNPATH) using detected page size
-5. Remap FHS paths to target system structure using dynamic prefix map
-6. Patch scripts and config files replacing paths
-7. Build/update dependency graph tracking every file
-8. Verify everything resolves correctly post-install (using detected lib dirs)
+2. **Resolve** — recursive dependency resolution with cycle detection
+3. **Check conflicts** — file ownership, binary/library name, version constraints, declared conflicts
+4. **Download** packages in parallel (up to 4 threads) with progress bars and retry
+5. **Extract** and analyze all ELF binaries with `goblin`
+6. **Patch** binaries with `elb` (interpreter, RUNPATH) using detected page size
+7. **Remap** FHS paths to target system structure using dynamic prefix map
+8. **Install** with atomic transaction — rollback on any failure
+9. **Track** every file in a dependency graph and persistent database
+10. **Verify** everything resolves correctly post-install (using detected lib dirs)
 
 ### Module structure
 ```
 src/
   main.rs              # Entry point: CLI parsing + SystemProfile detection + dispatch
   lib.rs               # Re-exports core public API
-  error.rs             # ZlError enum (thiserror), ZlResult type alias
+  error.rs             # ZlError enum (thiserror), ZlResult type alias, retry_with_backoff()
   config.rs            # Config parsing (~/.config/zl/config.toml), SystemConfig for overrides
   paths.rs             # ZL directory layout (~/.local/share/zl/)
   system/
@@ -54,41 +56,56 @@ src/
     paths.rs           # Host lib/bin path discovery (ldconfig, ld.so.conf, multiarch, NixOS)
     detect.rs          # System layout detection (FHS, MergedUsr, NixOS, Guix, Termux, GoboLinux)
   cli/
-    mod.rs             # Cli struct (clap derive), Commands enum
-    install.rs         # Install subcommand handler (full flow, uses SystemProfile)
-    remove.rs          # Remove subcommand handler
+    mod.rs             # Cli struct (clap derive), Commands enum, all arg structs
+    deps.rs            # Dependency resolution: recursive resolve, install plan, cycle detection
+    install.rs         # Install: conflict check, parallel download, transaction-wrapped install
+    remove.rs          # Remove: delete files, symlinks, deps, DB entries, cascade orphans
     search.rs          # Search subcommand handler
-    update.rs          # Update subcommand handler (uses SystemProfile)
-    list.rs            # List subcommand handler
+    update.rs          # Update: check newer versions, skip pinned, remove old + install new
+    list.rs            # List: --explicit, --deps, --orphans filters
+    info.rs            # Detailed package info: deps, reverse deps, disk usage, pin status
+    cache.rs           # Cache management: list files + sizes, clean all cached files
+    completions.rs     # Shell completions generation (bash/zsh/fish) via clap_complete
+    pin.rs             # Pin/unpin packages to prevent updates
+    lockfile.rs        # Export/import installed packages as JSON lockfile
   core/
+    build/
+      mod.rs           # BuildSpec, BuildSystem enum, detect_build_system(), build_package()
+      systems.rs       # Build system implementations: autotools, cmake, meson, cargo, make
     elf/
       analysis.rs      # Read ELF metadata with goblin (interpreter, needed libs, rpath, soname)
       patcher.rs       # Patch ELF with elb (set interpreter, set runpath) — uses profile.page_size
     path/
       mod.rs           # PathMapping struct — dynamic FHS-to-ZL path translation via SystemProfile
       remapper.rs      # Rewrite paths in text files and shebangs
+    transaction.rs     # Atomic install transaction: tracks files/dirs/symlinks/DB, rollback on failure
+    conflicts.rs       # Conflict detection: file ownership, binary/lib name, version constraints, declared conflicts
     graph/
       model.rs         # PackageId, PackageNode, DependencyEdge, DepGraph (petgraph)
       resolver.rs      # Topological sort, cycle detection, orphan detection
       verifier.rs      # Post-install verification — uses profile.lib_dirs for lib search
     db/
-      schema.rs        # redb table definitions (PACKAGES, FILE_OWNERS, LIB_INDEX, DEPENDENCIES)
-      ops.rs           # CRUD operations on the database
+      schema.rs        # redb table definitions (PACKAGES, FILE_OWNERS, LIB_INDEX, DEPENDENCIES, PINNED)
+      ops.rs           # CRUD: packages, file ownership, lib index, dependencies, pinning, plugin metadata
   plugin/
     mod.rs             # SourcePlugin trait, PackageCandidate, ExtractedPackage, PluginRegistry
     pacman/
-      mod.rs           # PacmanPlugin implementing SourcePlugin
+      mod.rs           # PacmanPlugin: SourcePlugin + provides-based resolution
       mirror.rs        # Mirror list parsing and URL construction
-      database.rs      # Sync DB download/parsing (pacman desc format)
-      package.rs       # .pkg.tar.zst download, extraction, .PKGINFO parsing
+      database.rs      # Sync DB download/parsing with retry (pacman desc format)
+      package.rs       # .pkg.tar.zst download with retry, extraction, .PKGINFO parsing
 ```
 
 ### Key abstractions
 - **SystemProfile** (`system/mod.rs`): auto-detected host profile (arch, interpreter, libc, lib dirs, layout). Built once at startup, passed to all modules. Replaces all hardcoded FHS assumptions.
 - **SourcePlugin trait** (`plugin/mod.rs`): interface every package source implements (search, resolve, download, extract, sync)
+- **InstallPlan** (`cli/deps.rs`): result of recursive dependency resolution — ordered list of packages to install
 - **PathMapping** (`core/path/mod.rs`): maps FHS paths to ZL-managed paths for a specific package, using SystemProfile
+- **Transaction** (`core/transaction.rs`): atomic install transaction tracking filesystem + DB changes with rollback support
+- **ConflictReport** (`core/conflicts.rs`): pre-install conflict detection (file ownership, binary/library names, version constraints, declared conflicts)
+- **BuildSpec/BuildSystem** (`core/build/mod.rs`): source build specification with auto-detection of build systems
 - **DepGraph** (`core/graph/model.rs`): petgraph-based dependency graph tracking all packages and their relationships
-- **ZlDatabase** (`core/db/ops.rs`): redb-based persistent storage for installed packages, file ownership, library index
+- **ZlDatabase** (`core/db/ops.rs`): redb-based persistent storage for installed packages, file ownership, library index, dependency tracking, package pinning
 
 ### Key crates
 | Crate | Purpose |
@@ -99,6 +116,8 @@ src/
 | `redb` | Embedded key-value database (pure Rust, ACID, no C deps) |
 | `libc` | System detection (sysconf for page size) |
 | `clap` (derive) | CLI argument parsing |
+| `clap_complete` | Shell completions generation (bash/zsh/fish) |
+| `indicatif` | Progress bars for downloads and installs |
 | `reqwest` (blocking) | HTTP downloads |
 | `tar` + `zstd` + `flate2` | Archive extraction |
 
@@ -111,7 +130,7 @@ src/
   etc/          # Config files
   packages/     # Per-package directories (name-version/)
   cache/        # Download cache
-  zl.redb       # Package database
+  zl.redb       # Package database (PACKAGES, FILE_OWNERS, LIB_INDEX, DEPENDENCIES, PINNED tables)
 ```
 
 ### Design decisions
@@ -120,7 +139,10 @@ src/
 - **RUNPATH over RPATH**: modern standard, respects LD_LIBRARY_PATH
 - **redb over SQLite**: pure Rust, maintains single-binary zero-deps constraint
 - **elb over shelling out to patchelf**: pure Rust, no external dependency
-- **Sync HTTP for Phase 1**: simpler; async for parallel downloads in future phases
+- **Parallel downloads with thread::scope**: up to 4 concurrent downloads, no tokio needed
+- **Retry with exponential backoff**: all HTTP operations retry up to 3 times (1s, 2s, 4s)
+- **Atomic transactions**: installs are wrapped in Transaction; on failure, all filesystem + DB changes are rolled back
+- **Pre-install conflict detection**: 5 types of conflicts checked before any files are written
 
 ### SystemProfile detection chain
 1. **Architecture**: `std::env::consts::ARCH` (compile-time, always correct for running binary)
@@ -141,52 +163,57 @@ src/
 - GoboLinux
 - Any architecture: x86_64, aarch64, armv7, riscv64, i686, s390x, ppc64le
 
-## Implementation Status (Phase 1: Core + Pacman plugin + Universal distro support)
+## Implementation Status
 
-### Fully implemented
+### Phase 1: Core + Pacman plugin + Universal distro support (complete)
 - [x] Project skeleton: Cargo.toml with all dependencies, full directory structure
-- [x] `error.rs` — ZlError enum with all variants, ZlResult alias
+- [x] `error.rs` — ZlError enum with all variants, ZlResult alias, retry_with_backoff()
 - [x] `paths.rs` — ZlPaths struct with ensure_dirs()
 - [x] `config.rs` — ZlConfig, GeneralConfig, SystemConfig, PluginConfig deserialization
-- [x] `cli/mod.rs` — Cli struct, Commands enum, all arg structs (clap derive)
-- [x] `cli/install.rs` — Full install flow: sync, resolve, download, extract, patch, remap, symlink, DB (uses SystemProfile)
-- [x] `cli/remove.rs` — Remove: delete files, symlinks, DB entries, cascade orphans
-- [x] `cli/search.rs` — Search across plugins, sync + display results
-- [x] `cli/update.rs` — Update: check newer versions, remove old + install new (uses SystemProfile)
-- [x] `cli/list.rs` — List installed packages from DB
 - [x] `main.rs` — Full bootstrap: config, SystemProfile detection, paths, DB, plugin registry, CLI dispatch
 - [x] `lib.rs` — Re-exports core modules including system
-- [x] `system/mod.rs` — SystemProfile struct, detect(), apply_overrides(), system_lib_exists()
-- [x] `system/arch.rs` — Arch enum, detect(), from_str(), is_64bit(), pacman_name()
-- [x] `system/interpreter.rs` — detect_interpreter() via PT_INTERP of /bin/sh, fallback scan
-- [x] `system/libc.rs` — LibC enum, detect_libc() from interpreter path, version detection
-- [x] `system/paths.rs` — discover_lib_dirs(), discover_bin_dirs(), detect_multiarch_tuple(), fhs_source_prefixes()
-- [x] `system/detect.rs` — SystemLayout enum, detect_layout(), detect_page_size() via sysconf
-- [x] `core/elf/analysis.rs` — Full ELF analysis with goblin (analyze, scan_directory, is_elf_file)
-- [x] `core/elf/patcher.rs` — ELF patching with elb, uses profile.page_size (not hardcoded)
-- [x] `core/path/mod.rs` — PathMapping with dynamic prefix_map from SystemProfile (includes multiarch)
-- [x] `core/path/remapper.rs` — Text file and shebang remapping
-- [x] `plugin/mod.rs` — SourcePlugin trait, PackageCandidate, ExtractedPackage, PluginRegistry
-- [x] `core/graph/model.rs` — PackageId, PackageNode, DependencyEdge, DepGraph structs
-- [x] `core/db/schema.rs` — redb table definitions (PACKAGES, FILE_OWNERS, LIB_INDEX, DEPENDENCIES, PLUGIN_META)
-- [x] `core/graph/resolver.rs` — topological sort, cycle detection, orphan detection, install ordering
-- [x] `core/graph/verifier.rs` — post-install ELF verification using profile.lib_dirs (not hardcoded FHS_LIB_DIRS)
-- [x] `core/db/ops.rs` — ZlDatabase CRUD: packages, file ownership, lib index, plugin metadata
-- [x] `plugin/pacman/mod.rs` — PacmanPlugin implementing full SourcePlugin trait
-- [x] `plugin/pacman/mirror.rs` — mirrorlist parsing, default mirrors, URL construction
-- [x] `plugin/pacman/database.rs` — sync DB download, tar.gz parsing, desc file parsing
-- [x] `plugin/pacman/package.rs` — .pkg.tar.zst download/extract, .PKGINFO parsing, SHA256 verification
+- [x] `system/` — Full SystemProfile detection (arch, interpreter, libc, lib dirs, layout)
+- [x] `core/elf/` — ELF analysis (goblin) and patching (elb) with dynamic page size
+- [x] `core/path/` — PathMapping with dynamic prefix map, script/shebang remapping
+- [x] `core/graph/` — DepGraph, topological sort, cycle detection, orphan detection, verification
+- [x] `core/db/` — redb tables, CRUD for packages/files/libs/deps/plugin metadata
+- [x] `plugin/pacman/` — Full PacmanPlugin: sync, search, resolve, download, extract
 
-### Phase 1 complete
-All core modules, the Pacman plugin, and the SystemProfile detection system are fully implemented and wired together.
-The project compiles and all 27 tests pass (including 15 new system detection tests).
+### Phase 2: Dep resolution + Parallel downloads + Source builds + Error handling (complete)
+- [x] `cli/deps.rs` — Recursive dependency resolution with cycle detection, install plan display
+- [x] `cli/install.rs` — Full dep resolution, parallel downloads (4 threads), sequential install
+- [x] `cli/remove.rs` — Improved orphan detection using dep table + lib needs
+- [x] `cli/update.rs` — Uses install_single_package(), only updates explicit packages
+- [x] `core/build/` — BuildSpec, BuildSystem enum, detect + build for autotools/cmake/meson/cargo/make
+- [x] `core/db/ops.rs` — Dependency tracking: register, get, reverse lookup, remove
+- [x] `plugin/pacman/mod.rs` — Provides-based virtual package resolution
+- [x] `plugin/pacman/package.rs` — Download with retry, checksum cache verification
+- [x] `plugin/pacman/database.rs` — DB sync with retry
+
+### Phase 3: Safety, UX, and package management features (complete)
+- [x] `core/transaction.rs` — Atomic install transactions: track files/dirs/symlinks/DB entries, rollback on failure
+- [x] `core/conflicts.rs` — Pre-install conflict detection: file ownership, binary name, library soname, declared conflicts, version constraints (with component-by-component comparison)
+- [x] `core/db/schema.rs` — Added PINNED table for package pinning
+- [x] `core/db/ops.rs` — Added pin_package(), unpin_package(), is_pinned(), list_pinned()
+- [x] `cli/install.rs` — Integrated: conflict checking, transaction-wrapped installs, progress bars (indicatif)
+- [x] `cli/update.rs` — Respects pinned packages (skips them during updates)
+- [x] `cli/info.rs` — Detailed package info: name, version, source, status, deps, reverse deps, disk usage
+- [x] `cli/cache.rs` — Cache management: `zl cache list` (files + sizes), `zl cache clean` (free space)
+- [x] `cli/completions.rs` — Shell completions: `zl completions bash/zsh/fish` via clap_complete
+- [x] `cli/list.rs` — Enhanced: `--explicit`, `--deps`, `--orphans` filters, pin status display
+- [x] `cli/pin.rs` — Pin/unpin packages: `zl pin <pkg>`, `zl unpin <pkg>`
+- [x] `cli/lockfile.rs` — Lockfile: `zl export [file]`, `zl import <file>` (JSON format)
+- [x] `cli/mod.rs` — All new commands wired up: Info, Cache, Completions, Pin, Unpin, Export, Import
+
+### All tests pass: 64 tests
+The project compiles and all 64 tests pass.
 
 ### Removed
 - `core/path/fhs.rs` — replaced by `system/` module. No more hardcoded FHS constants.
 
-### Future work (Phase 2+)
+### Future work (Phase 4+)
 - [ ] Additional plugins: APT, RPM, AppImage, GitHub Releases, pip, npm, cargo
-- [ ] Async HTTP for parallel downloads
-- [ ] Dependency auto-resolution (auto-install missing deps from same source)
+- [ ] GPG signature verification for downloaded packages
 - [ ] Cross-OS support (macOS/Homebrew via HostAdapter trait)
-- [ ] Source build fallback (compile from source when binary is incompatible)
+- [ ] Interactive conflict resolution (dialoguer is already in deps)
+- [ ] Async HTTP for even faster parallel downloads

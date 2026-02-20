@@ -120,7 +120,12 @@ Server = https://mirror.de.example.com/$repo/os/$arch
             country: None,
         };
         assert_eq!(
-            package_url(&mirror, "extra", "x86_64", "firefox-120.0-1-x86_64.pkg.tar.zst"),
+            package_url(
+                &mirror,
+                "extra",
+                "x86_64",
+                "firefox-120.0-1-x86_64.pkg.tar.zst"
+            ),
             "https://geo.mirror.pkgbuild.com/extra/os/x86_64/firefox-120.0-1-x86_64.pkg.tar.zst"
         );
     }

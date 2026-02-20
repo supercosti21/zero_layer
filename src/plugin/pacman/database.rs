@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::io::Read;
 use std::path::Path;
 
-use crate::error::{ZlError, ZlResult};
+use crate::error::{ZlError, ZlResult, retry_with_backoff};
 use crate::plugin::PackageCandidate;
 
 use super::mirror::{self, Mirror};
@@ -37,21 +37,34 @@ pub fn sync_repo(
 
     tracing::info!("Syncing {} from {}", repo, url);
 
-    let response = reqwest::blocking::get(&url).map_err(|e| ZlError::Plugin {
-        plugin: "pacman".into(),
-        message: format!("Failed to download {}: {}", url, e),
-    })?;
+    let bytes = retry_with_backoff(3, 1000, |attempt| {
+        if attempt > 1 {
+            tracing::info!("Sync attempt {}/3 for {}", attempt, repo);
+        }
 
-    if !response.status().is_success() {
-        return Err(ZlError::Plugin {
-            plugin: "pacman".into(),
-            message: format!("HTTP {} for {}", response.status(), url),
-        });
-    }
+        let response = reqwest::blocking::Client::new()
+            .get(&url)
+            .timeout(std::time::Duration::from_secs(120))
+            .send()
+            .map_err(|e| ZlError::DownloadFailed {
+                url: url.clone(),
+                attempts: attempt,
+                message: format!("Failed to download {}: {}", repo, e),
+            })?;
 
-    let bytes = response.bytes().map_err(|e| ZlError::Plugin {
-        plugin: "pacman".into(),
-        message: format!("Failed to read response: {}", e),
+        if !response.status().is_success() {
+            return Err(ZlError::DownloadFailed {
+                url: url.clone(),
+                attempts: attempt,
+                message: format!("HTTP {}", response.status()),
+            });
+        }
+
+        response.bytes().map_err(|e| ZlError::DownloadFailed {
+            url: url.clone(),
+            attempts: attempt,
+            message: format!("Failed to read response: {}", e),
+        })
     })?;
 
     std::fs::write(&db_path, &bytes)?;
@@ -67,7 +80,10 @@ pub fn parse_db(db_path: &Path) -> ZlResult<Vec<DbEntry>> {
     let mut entries = Vec::new();
     let mut current_map: HashMap<String, DbEntry> = HashMap::new();
 
-    for entry in archive.entries().map_err(|e| ZlError::Archive(e.to_string()))? {
+    for entry in archive
+        .entries()
+        .map_err(|e| ZlError::Archive(e.to_string()))?
+    {
         let mut entry = entry.map_err(|e| ZlError::Archive(e.to_string()))?;
         let path = entry
             .path()
