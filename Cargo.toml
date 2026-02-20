@@ -1,0 +1,59 @@
+[package]
+name = "zero_layer"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-only"
+description = "Universal Linux package manager with native binary translation"
+
+[[bin]]
+name = "zl"
+path = "src/main.rs"
+
+[dependencies]
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# ELF analysis (read-only parsing)
+goblin = "0.9"
+
+# ELF patching (set interpreter, rpath, runpath)
+elb = "0.4"
+
+# Dependency graph
+petgraph = "0.8"
+
+# Database (embedded key-value, pure Rust, ACID)
+redb = "2"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# HTTP client
+reqwest = { version = "0.12", features = ["blocking"] }
+
+# Compression/archive
+tar = "0.4"
+zstd = "0.13"
+flate2 = "1"
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Progress bars and user interaction
+indicatif = "0.17"
+dialoguer = "0.11"
+
+# File hashing
+sha2 = "0.10"
+
+# Filesystem utilities
+walkdir = "2"
+tempfile = "3"
+dirs = "6"
