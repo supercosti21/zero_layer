@@ -204,7 +204,9 @@ fn check_file_ownership_conflicts(
     conflicts: &mut Vec<Conflict>,
 ) -> ZlResult<()> {
     // Check expected file locations that would be installed
-    let pkg_dir = paths.packages.join(format!("{}-{}", candidate.name, candidate.version));
+    let pkg_dir = paths
+        .packages
+        .join(format!("{}-{}", candidate.name, candidate.version));
 
     // If the package dir already exists on disk, scan its files
     if pkg_dir.is_dir() {
@@ -220,7 +222,9 @@ fn scan_dir_for_ownership_conflicts(
     db: &ZlDatabase,
     conflicts: &mut Vec<Conflict>,
 ) -> ZlResult<()> {
-    let walker = walkdir::WalkDir::new(dir).into_iter().filter_map(|e| e.ok());
+    let walker = walkdir::WalkDir::new(dir)
+        .into_iter()
+        .filter_map(|e| e.ok());
     for entry in walker {
         if entry.file_type().is_file() || entry.file_type().is_symlink() {
             let path_str = entry.path().to_string_lossy().to_string();
@@ -517,25 +521,28 @@ mod tests {
         assert_eq!(compare_versions("1.0", "1.0"), std::cmp::Ordering::Equal);
         assert_eq!(compare_versions("2.0", "1.0"), std::cmp::Ordering::Greater);
         assert_eq!(compare_versions("1.0", "2.0"), std::cmp::Ordering::Less);
-        assert_eq!(
-            compare_versions("1.10", "1.9"),
-            std::cmp::Ordering::Greater
-        );
-        assert_eq!(
-            compare_versions("1.0.0", "1.0"),
-            std::cmp::Ordering::Equal
-        );
+        assert_eq!(compare_versions("1.10", "1.9"), std::cmp::Ordering::Greater);
+        assert_eq!(compare_versions("1.0.0", "1.0"), std::cmp::Ordering::Equal);
     }
 
     // ── Dependency spec parsing tests ──
 
     #[test]
     fn test_parse_dependency_spec() {
-        assert_eq!(parse_dependency_spec("glibc>=2.17"), ("glibc", Some(">=2.17")));
-        assert_eq!(parse_dependency_spec("openssl<4.0"), ("openssl", Some("<4.0")));
+        assert_eq!(
+            parse_dependency_spec("glibc>=2.17"),
+            ("glibc", Some(">=2.17"))
+        );
+        assert_eq!(
+            parse_dependency_spec("openssl<4.0"),
+            ("openssl", Some("<4.0"))
+        );
         assert_eq!(parse_dependency_spec("zlib=1.3"), ("zlib", Some("=1.3")));
         assert_eq!(parse_dependency_spec("curl"), ("curl", None));
-        assert_eq!(parse_dependency_spec("libfoo<=2.0"), ("libfoo", Some("<=2.0")));
+        assert_eq!(
+            parse_dependency_spec("libfoo<=2.0"),
+            ("libfoo", Some("<=2.0"))
+        );
         assert_eq!(parse_dependency_spec("bar>1.5"), ("bar", Some(">1.5")));
     }
 
@@ -555,13 +562,12 @@ mod tests {
     #[test]
     fn test_extract_package_key_from_path() {
         assert_eq!(
-            extract_package_key_from_path("/home/user/.local/share/zl/packages/firefox-120.0/bin/firefox"),
+            extract_package_key_from_path(
+                "/home/user/.local/share/zl/packages/firefox-120.0/bin/firefox"
+            ),
             Some("firefox-120.0".to_string())
         );
-        assert_eq!(
-            extract_package_key_from_path("/no/pkgs/here"),
-            None
-        );
+        assert_eq!(extract_package_key_from_path("/no/pkgs/here"), None);
     }
 
     // ── Integration: check_conflicts ──
@@ -768,12 +774,10 @@ mod tests {
     #[test]
     fn test_conflict_report_display() {
         let report = ConflictReport {
-            conflicts: vec![
-                Conflict::DeclaredConflict {
-                    package: "a-1.0".into(),
-                    conflicts_with: "b-2.0".into(),
-                },
-            ],
+            conflicts: vec![Conflict::DeclaredConflict {
+                package: "a-1.0".into(),
+                conflicts_with: "b-2.0".into(),
+            }],
         };
         // Just verify it doesn't panic
         report.display();

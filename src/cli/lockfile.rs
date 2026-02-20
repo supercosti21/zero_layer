@@ -91,7 +91,14 @@ pub fn handle_import(args: ImportArgs, db: &ZlDatabase) -> ZlResult<()> {
     if to_install.is_empty() {
         println!("All packages from lockfile are already installed.");
         if !already.is_empty() {
-            println!("Already installed: {}", already.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "));
+            println!(
+                "Already installed: {}",
+                already
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
         }
         return Ok(());
     }
@@ -112,7 +119,12 @@ pub fn handle_import(args: ImportArgs, db: &ZlDatabase) -> ZlResult<()> {
         to_install
             .iter()
             .filter(|e| e.explicit)
-            .map(|e| format!("zl install {} --from {} --version {}", e.name, source_plugin_name(&e.source), e.version))
+            .map(|e| format!(
+                "zl install {} --from {} --version {}",
+                e.name,
+                source_plugin_name(&e.source),
+                e.version
+            ))
             .collect::<Vec<_>>()
             .join("\n  ")
     );

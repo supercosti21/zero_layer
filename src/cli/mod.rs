@@ -1,6 +1,7 @@
 pub mod cache;
 pub mod completions;
 pub mod deps;
+pub mod env;
 pub mod info;
 pub mod install;
 pub mod list;
@@ -8,7 +9,9 @@ pub mod lockfile;
 pub mod pin;
 pub mod remove;
 pub mod search;
+pub mod selfupdate;
 pub mod update;
+pub mod upgrade;
 
 use clap::{Args, Parser, Subcommand};
 use clap_complete::Shell;
@@ -40,6 +43,14 @@ pub struct GlobalOpts {
     /// Suppress interactive prompts
     #[arg(short = 'y', long, global = true)]
     pub yes: bool,
+
+    /// Dry-run mode: show what would happen without making changes
+    #[arg(long, alias = "simulate", global = true)]
+    pub dry_run: bool,
+
+    /// Skip checksum and GPG signature verification
+    #[arg(long, global = true)]
+    pub skip_verify: bool,
 }
 
 #[derive(Subcommand)]
@@ -50,6 +61,8 @@ pub enum Commands {
     Remove(RemoveArgs),
     /// Update installed packages
     Update(UpdateArgs),
+    /// Upgrade all packages at once
+    Upgrade(UpgradeArgs),
     /// Search for packages across sources
     Search(SearchArgs),
     /// List installed packages
@@ -69,6 +82,13 @@ pub enum Commands {
     Export(ExportArgs),
     /// Import packages from a lockfile
     Import(ImportArgs),
+    /// Switch active version of a multi-version package
+    Switch(SwitchArgs),
+    /// Update ZL itself to the latest version
+    SelfUpdate,
+    /// Manage ephemeral environments
+    #[command(subcommand)]
+    Env(EnvCommand),
 }
 
 #[derive(Args)]
@@ -90,12 +110,25 @@ pub struct RemoveArgs {
     /// Also remove orphaned dependencies
     #[arg(long)]
     pub cascade: bool,
+    /// Remove a specific version (default: all versions)
+    #[arg(long)]
+    pub version: Option<String>,
 }
 
 #[derive(Args)]
 pub struct UpdateArgs {
     /// Specific package (default: all)
     pub package: Option<String>,
+}
+
+#[derive(Args)]
+pub struct UpgradeArgs {
+    /// Source to upgrade from (default: all sources)
+    #[arg(long)]
+    pub from: Option<String>,
+    /// Only show what would be upgraded, don't actually upgrade
+    #[arg(long)]
+    pub check: bool,
 }
 
 #[derive(Args)]
@@ -162,4 +195,34 @@ pub struct ExportArgs {
 pub struct ImportArgs {
     /// Lockfile path to import
     pub file: std::path::PathBuf,
+}
+
+#[derive(Args)]
+pub struct SwitchArgs {
+    /// Package name
+    pub package: String,
+    /// Version to activate
+    pub version: String,
+}
+
+#[derive(Subcommand)]
+pub enum EnvCommand {
+    /// Create and enter an ephemeral environment (deleted on exit)
+    Shell(EnvShellArgs),
+    /// List existing named environments
+    List,
+    /// Delete a named environment
+    Delete(EnvDeleteArgs),
+}
+
+#[derive(Args)]
+pub struct EnvShellArgs {
+    /// Environment name (omit for temporary, auto-deleted on exit)
+    pub name: Option<String>,
+}
+
+#[derive(Args)]
+pub struct EnvDeleteArgs {
+    /// Name of the environment to delete
+    pub name: String,
 }

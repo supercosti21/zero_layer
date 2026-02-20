@@ -13,7 +13,13 @@ pub fn handle(
     registry: &PluginRegistry,
     profile: &SystemProfile,
     _auto_yes: bool,
+    dry_run: bool,
+    skip_verify: bool,
 ) -> ZlResult<()> {
+    if dry_run {
+        println!("[DRY-RUN] Simulating update...");
+    }
+
     // Get list of packages to update
     let packages = match args.package {
         Some(ref name) => {
@@ -71,17 +77,28 @@ pub fn handle(
                     pkg.id.name, pkg.id.version, candidate.version
                 );
 
+                if dry_run {
+                    updated += 1;
+                    continue;
+                }
+
                 // Remove old version
                 let remove_args = RemoveArgs {
                     package: pkg.id.name.clone(),
                     cascade: false,
+                    version: Some(pkg.id.version.clone()),
                 };
-                super::remove::handle(remove_args, paths, db, true)?;
+                super::remove::handle(remove_args, paths, db, true, false)?;
 
                 // Install new version directly (skip dep resolution for updates)
                 super::install::install_single_package(
-                    &candidate, true, // maintain explicit status
-                    paths, db, plugin, profile,
+                    &candidate,
+                    true, // maintain explicit status
+                    paths,
+                    db,
+                    plugin,
+                    profile,
+                    skip_verify,
                 )?;
 
                 updated += 1;
@@ -95,7 +112,16 @@ pub fn handle(
         }
     }
 
-    if updated == 0 {
+    if dry_run {
+        if updated == 0 {
+            println!("[DRY-RUN] All packages are up to date.");
+        } else {
+            println!(
+                "[DRY-RUN] Would update {} package(s). No changes made.",
+                updated
+            );
+        }
+    } else if updated == 0 {
         println!("All packages are up to date.");
     } else {
         println!("\n{} package(s) updated.", updated);

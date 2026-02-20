@@ -40,9 +40,13 @@ fn main() {
 fn run(cli_args: cli::Cli) -> anyhow::Result<()> {
     // Shell completions can run without any setup
     if let cli::Commands::Completions(ref args) = cli_args.command {
-        cli::completions::handle(cli::CompletionsArgs {
-            shell: args.shell,
-        })?;
+        cli::completions::handle(cli::CompletionsArgs { shell: args.shell })?;
+        return Ok(());
+    }
+
+    // Self-update can run without full setup
+    if let cli::Commands::SelfUpdate = cli_args.command {
+        cli::selfupdate::handle()?;
         return Ok(());
     }
 
@@ -75,20 +79,52 @@ fn run(cli_args: cli::Cli) -> anyhow::Result<()> {
     registry.register(Box::new(pacman));
 
     let auto_yes = cli_args.global.yes || config.general.auto_confirm;
+    let dry_run = cli_args.global.dry_run;
+    let skip_verify = cli_args.global.skip_verify;
 
     // Dispatch commands
     match cli_args.command {
         cli::Commands::Install(args) => {
-            cli::install::handle(args, &zl_paths, &db, &registry, &profile, auto_yes)?;
+            cli::install::handle(
+                args,
+                &zl_paths,
+                &db,
+                &registry,
+                &profile,
+                auto_yes,
+                dry_run,
+                skip_verify,
+            )?;
         }
         cli::Commands::Remove(args) => {
-            cli::remove::handle(args, &zl_paths, &db, auto_yes)?;
+            cli::remove::handle(args, &zl_paths, &db, auto_yes, dry_run)?;
         }
         cli::Commands::Search(args) => {
             cli::search::handle(args, &registry)?;
         }
         cli::Commands::Update(args) => {
-            cli::update::handle(args, &zl_paths, &db, &registry, &profile, auto_yes)?;
+            cli::update::handle(
+                args,
+                &zl_paths,
+                &db,
+                &registry,
+                &profile,
+                auto_yes,
+                dry_run,
+                skip_verify,
+            )?;
+        }
+        cli::Commands::Upgrade(args) => {
+            cli::upgrade::handle(
+                args,
+                &zl_paths,
+                &db,
+                &registry,
+                &profile,
+                auto_yes,
+                dry_run,
+                skip_verify,
+            )?;
         }
         cli::Commands::List(args) => {
             cli::list::handle(args, &db)?;
@@ -113,6 +149,15 @@ fn run(cli_args: cli::Cli) -> anyhow::Result<()> {
         }
         cli::Commands::Import(args) => {
             cli::lockfile::handle_import(args, &db)?;
+        }
+        cli::Commands::Switch(args) => {
+            cli::install::handle_switch(args, &zl_paths, &db)?;
+        }
+        cli::Commands::SelfUpdate => {
+            unreachable!("handled above");
+        }
+        cli::Commands::Env(cmd) => {
+            cli::env::handle(cmd, &zl_paths, &config, &profile)?;
         }
     }
 

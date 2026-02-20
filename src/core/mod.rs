@@ -5,3 +5,4 @@ pub mod elf;
 pub mod graph;
 pub mod path;
 pub mod transaction;
+pub mod verify;

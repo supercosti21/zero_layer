@@ -80,6 +80,33 @@ impl ZlDatabase {
         }
     }
 
+    /// Get all installed versions of a package by name
+    pub fn get_all_versions(&self, name: &str) -> ZlResult<Vec<PackageNode>> {
+        let txn = self
+            .db
+            .begin_read()
+            .map_err(|e| ZlError::Config(e.to_string()))?;
+        let table = txn
+            .open_table(PACKAGES)
+            .map_err(|e| ZlError::Config(e.to_string()))?;
+        let prefix = format!("{}-", name);
+        let mut versions = Vec::new();
+
+        let iter = table
+            .iter()
+            .map_err(|e: redb::StorageError| ZlError::Config(e.to_string()))?;
+        for entry in iter {
+            let (k, v) = entry.map_err(|e: redb::StorageError| ZlError::Config(e.to_string()))?;
+            if k.value().starts_with(&prefix) {
+                let node: PackageNode = serde_json::from_slice(v.value())?;
+                if node.id.name == name {
+                    versions.push(node);
+                }
+            }
+        }
+        Ok(versions)
+    }
+
     /// Get a package by name only (returns first match)
     pub fn get_package_by_name(&self, name: &str) -> ZlResult<Option<PackageNode>> {
         let txn = self
@@ -598,5 +625,24 @@ mod tests {
         assert!(db.unpin_package("firefox").unwrap());
         assert!(!db.is_pinned("firefox").unwrap());
         assert!(db.list_pinned().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_get_all_versions() {
+        let db = test_db();
+        db.put_package(&make_node("firefox", "120.0")).unwrap();
+        db.put_package(&make_node("firefox", "121.0")).unwrap();
+        db.put_package(&make_node("chrome", "119.0")).unwrap();
+
+        let versions = db.get_all_versions("firefox").unwrap();
+        assert_eq!(versions.len(), 2);
+        assert!(versions.iter().any(|v| v.id.version == "120.0"));
+        assert!(versions.iter().any(|v| v.id.version == "121.0"));
+
+        let chrome = db.get_all_versions("chrome").unwrap();
+        assert_eq!(chrome.len(), 1);
+
+        let none = db.get_all_versions("nonexistent").unwrap();
+        assert!(none.is_empty());
     }
 }
