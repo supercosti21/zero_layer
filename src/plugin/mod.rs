@@ -60,4 +60,17 @@ impl PluginRegistry {
             .find(|p| p.name() == name)
             .map(|p| p.as_ref())
     }
+
+    /// Get all registered plugins
+    pub fn all(&self) -> Vec<&dyn SourcePlugin> {
+        self.plugins.iter().map(|p| p.as_ref()).collect()
+    }
+
+    /// Get plugin by name, or fall back to first registered plugin
+    pub fn get_or_default(&self, name: Option<&str>) -> Option<&dyn SourcePlugin> {
+        match name {
+            Some(n) => self.get(n),
+            None => self.plugins.first().map(|p| p.as_ref()),
+        }
+    }
 }

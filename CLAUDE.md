@@ -42,6 +42,11 @@ src/
   paths.rs             # ZL directory layout (~/.local/share/zl/)
   cli/
     mod.rs             # Cli struct (clap derive), Commands enum
+    install.rs         # Install subcommand handler (full flow)
+    remove.rs          # Remove subcommand handler
+    search.rs          # Search subcommand handler
+    update.rs          # Update subcommand handler
+    list.rs            # List subcommand handler
   core/
     elf/
       analysis.rs      # Read ELF metadata with goblin (interpreter, needed libs, rpath, soname)
@@ -110,7 +115,12 @@ src/
 - [x] `paths.rs` — ZlPaths struct with ensure_dirs()
 - [x] `config.rs` — ZlConfig, GeneralConfig, PluginConfig deserialization
 - [x] `cli/mod.rs` — Cli struct, Commands enum, all arg structs (clap derive)
-- [x] `main.rs` — CLI dispatch (stub handlers, tracing init)
+- [x] `cli/install.rs` — Full install flow: sync, resolve, download, extract, patch, remap, symlink, DB
+- [x] `cli/remove.rs` — Remove: delete files, symlinks, DB entries, cascade orphans
+- [x] `cli/search.rs` — Search across plugins, sync + display results
+- [x] `cli/update.rs` — Update: check newer versions, remove old + install new
+- [x] `cli/list.rs` — List installed packages from DB
+- [x] `main.rs` — Full bootstrap: config, paths, DB, plugin registry, CLI dispatch
 - [x] `lib.rs` — Re-exports core modules
 - [x] `core/elf/analysis.rs` — Full ELF analysis with goblin (analyze, scan_directory, is_elf_file)
 - [x] `core/elf/patcher.rs` — ELF patching with elb (patch_for_zl, set_interpreter, set_runpath)
@@ -129,6 +139,12 @@ src/
 - [x] `plugin/pacman/database.rs` — sync DB download, tar.gz parsing, desc file parsing
 - [x] `plugin/pacman/package.rs` — .pkg.tar.zst download/extract, .PKGINFO parsing, SHA256 verification
 
-### Not yet implemented
-- [ ] CLI subcommand handlers in `main.rs` — currently stubs (print "not yet implemented")
-- [ ] Wire up the full install/remove/search/update flows connecting CLI -> plugin -> ELF patching -> DB
+### Phase 1 complete
+All core modules and the Pacman plugin are fully implemented and wired together.
+The project compiles and all 12 tests pass.
+
+### Future work (Phase 2+)
+- [ ] Additional plugins: APT, RPM, AppImage, GitHub Releases, pip, npm, cargo
+- [ ] Async HTTP for parallel downloads
+- [ ] Dependency auto-resolution (auto-install missing deps from same source)
+- [ ] Multi-architecture support (aarch64, etc.)
