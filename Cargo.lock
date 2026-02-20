@@ -2423,6 +2423,7 @@ dependencies = [
  "flate2",
  "goblin",
  "indicatif",
+ "libc",
  "petgraph",
  "redb",
  "reqwest",

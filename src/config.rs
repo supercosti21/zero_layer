@@ -10,9 +10,27 @@ pub struct ZlConfig {
     /// Global settings
     #[serde(default)]
     pub general: GeneralConfig,
+    /// System overrides (interpreter, extra paths, layout)
+    #[serde(default)]
+    pub system: SystemConfig,
     /// Per-plugin configuration sections
     #[serde(default)]
     pub plugins: HashMap<String, PluginConfig>,
+}
+
+/// User overrides for auto-detected system profile
+#[derive(Debug, Deserialize, Default, Clone)]
+pub struct SystemConfig {
+    /// Override the auto-detected dynamic linker path
+    pub interpreter: Option<PathBuf>,
+    /// Extra library search directories (prepended to auto-detected list)
+    #[serde(default)]
+    pub extra_lib_dirs: Vec<PathBuf>,
+    /// Extra binary search directories (prepended to auto-detected list)
+    #[serde(default)]
+    pub extra_bin_dirs: Vec<PathBuf>,
+    /// Override auto-detected layout (fhs, merged, nixos, guix, termux, custom)
+    pub layout: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
