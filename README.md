@@ -92,9 +92,22 @@ Planned:
 - GitHub Releases
 - pip, npm, cargo
 
+### Universal Distro Support (SystemProfile)
+
+ZL auto-detects the host system at startup — no manual configuration needed. It discovers:
+
+- **CPU architecture** — x86_64, aarch64, armv7, riscv64, i686, s390x, ppc64le
+- **Dynamic linker** — detected by reading PT_INTERP from an existing system ELF (e.g., `/bin/sh`)
+- **C library** — glibc or musl (detected from the interpreter name)
+- **Library search paths** — from `ldconfig -p`, `ld.so.conf`, `LD_LIBRARY_PATH`, and layout-specific locations
+- **Filesystem layout** — FHS, Merged /usr, NixOS, GNU Guix, Termux, GoboLinux
+
+This means ZL works on any Linux distro without hardcoded assumptions: Arch, Ubuntu, Fedora, Alpine (musl), NixOS, Void, Gentoo, Clear Linux, Termux on Android, and more.
+
 ### Key Design Choices
 
 - **Pure Rust, single binary** — no C dependencies, no dynamic linking required
+- **Dynamic system detection** — all paths and interpreters auto-detected, never hardcoded
 - **ELF patching with `elb`** — pure-Rust patchelf alternative, sets interpreter and RUNPATH
 - **RUNPATH over RPATH** — modern standard, respects `LD_LIBRARY_PATH`
 - **`redb` database** — pure-Rust embedded key-value store (ACID, no SQLite/C dependency)
@@ -108,6 +121,13 @@ Optional config file at `~/.config/zl/config.toml`:
 [general]
 root = "/custom/zl/root"   # Override default root directory
 auto_confirm = false        # Auto-confirm prompts
+
+[system]
+# All fields are optional — auto-detection is used by default.
+# interpreter = "/custom/path/ld-linux.so"  # Override dynamic linker
+# extra_lib_dirs = ["/opt/mylibs"]          # Extra library search dirs
+# extra_bin_dirs = ["/opt/mybin"]           # Extra binary search dirs
+# layout = "nixos"                          # Override detected layout
 
 [plugins.pacman]
 enabled = true

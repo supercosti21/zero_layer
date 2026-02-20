@@ -2,18 +2,20 @@ use std::path::Path;
 
 use crate::core::path::PathMapping;
 use crate::error::ZlResult;
+use crate::system::SystemProfile;
 
 /// Apply all necessary patches to an ELF file for the ZL environment
 pub fn patch_for_zl(
     path: &Path,
     info: &super::analysis::ElfInfo,
     mapping: &PathMapping,
+    profile: &SystemProfile,
 ) -> ZlResult<()> {
     use elb::{DynamicTag, Elf};
     use std::fs::OpenOptions;
 
     let mut file = OpenOptions::new().read(true).write(true).open(path)?;
-    let elf = Elf::read(&mut file, page_size()).map_err(|e| {
+    let elf = Elf::read(&mut file, profile.page_size).map_err(|e| {
         crate::error::ZlError::ElfPatch {
             path: path.to_path_buf(),
             message: e.to_string(),
@@ -64,11 +66,11 @@ pub fn patch_for_zl(
 }
 
 /// Set only the interpreter of an ELF binary
-pub fn set_interpreter(path: &Path, new_interp: &str) -> ZlResult<()> {
+pub fn set_interpreter(path: &Path, new_interp: &str, page_size: u64) -> ZlResult<()> {
     use std::fs::OpenOptions;
 
     let mut file = OpenOptions::new().read(true).write(true).open(path)?;
-    let elf = elb::Elf::read(&mut file, page_size()).map_err(|e| {
+    let elf = elb::Elf::read(&mut file, page_size).map_err(|e| {
         crate::error::ZlError::ElfPatch {
             path: path.to_path_buf(),
             message: e.to_string(),
@@ -97,12 +99,12 @@ pub fn set_interpreter(path: &Path, new_interp: &str) -> ZlResult<()> {
 }
 
 /// Set only the RUNPATH of an ELF binary
-pub fn set_runpath(path: &Path, new_runpath: &str) -> ZlResult<()> {
+pub fn set_runpath(path: &Path, new_runpath: &str, page_size: u64) -> ZlResult<()> {
     use elb::DynamicTag;
     use std::fs::OpenOptions;
 
     let mut file = OpenOptions::new().read(true).write(true).open(path)?;
-    let elf = elb::Elf::read(&mut file, page_size()).map_err(|e| {
+    let elf = elb::Elf::read(&mut file, page_size).map_err(|e| {
         crate::error::ZlError::ElfPatch {
             path: path.to_path_buf(),
             message: e.to_string(),
@@ -128,8 +130,4 @@ pub fn set_runpath(path: &Path, new_runpath: &str) -> ZlResult<()> {
     })?;
 
     Ok(())
-}
-
-fn page_size() -> u64 {
-    4096
 }

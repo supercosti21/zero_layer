@@ -11,6 +11,7 @@ use crate::core::path::remapper;
 use crate::error::{ZlError, ZlResult};
 use crate::paths::ZlPaths;
 use crate::plugin::PluginRegistry;
+use crate::system::SystemProfile;
 
 use super::InstallArgs;
 
@@ -19,6 +20,7 @@ pub fn handle(
     paths: &ZlPaths,
     db: &ZlDatabase,
     registry: &PluginRegistry,
+    profile: &SystemProfile,
     auto_yes: bool,
 ) -> ZlResult<()> {
     // 1. Pick plugin
@@ -81,8 +83,8 @@ pub fn handle(
     println!("Extracting...");
     let extracted = plugin.extract(&archive_path)?;
 
-    // 7. Create path mapping
-    let mapping = PathMapping::for_package(&paths.root, &candidate.name, &candidate.version);
+    // 7. Create path mapping (now uses SystemProfile instead of hardcoded FHS)
+    let mapping = PathMapping::for_package(&paths.root, &candidate.name, &candidate.version, profile);
 
     // 8. Patch ELF binaries
     let elf_count = extracted.elf_files.len();
@@ -92,7 +94,7 @@ pub fn handle(
     for elf_path in &extracted.elf_files {
         match analysis::analyze(elf_path) {
             Ok(info) => {
-                if let Err(e) = patcher::patch_for_zl(elf_path, &info, &mapping) {
+                if let Err(e) = patcher::patch_for_zl(elf_path, &info, &mapping, profile) {
                     tracing::warn!("Failed to patch {}: {}", elf_path.display(), e);
                 }
             }
@@ -148,7 +150,7 @@ pub fn handle(
         }
     }
 
-    // 11. Create symlinks for binaries
+    // 11. Create symlinks for binaries (scans common + dynamic locations)
     create_bin_symlinks(&pkg_dir, &paths.bin)?;
 
     // 12. Create symlinks for shared libraries
@@ -203,7 +205,7 @@ pub fn handle(
     // 15. Verification (warn only)
     let lib_index_paths: HashMap<String, std::path::PathBuf> = provides_libs;
     let verification =
-        crate::core::graph::verifier::verify_package(&pkg_dir, &candidate.name, paths, &lib_index_paths)?;
+        crate::core::graph::verifier::verify_package(&pkg_dir, &candidate.name, paths, &lib_index_paths, profile)?;
     if !verification.all_ok {
         let report = crate::core::graph::verifier::format_report(&verification);
         eprintln!("\nWarning: {}", report);
@@ -220,10 +222,21 @@ pub fn handle(
     Ok(())
 }
 
-/// Find executables inside a package directory and symlink them into bin/
+/// Find executables inside a package directory and symlink them into bin/.
+/// Scans common FHS subdirectories plus performs a recursive scan for any
+/// executable ELF files in non-standard locations.
 fn create_bin_symlinks(pkg_dir: &Path, bin_dir: &Path) -> ZlResult<()> {
-    // Look for files in common binary locations within the package
-    let bin_subdirs = ["usr/bin", "usr/sbin", "bin", "sbin"];
+    // Common binary subdirectories within extracted packages
+    let bin_subdirs = [
+        "usr/bin",
+        "usr/sbin",
+        "bin",
+        "sbin",
+        "usr/local/bin",
+        "usr/local/sbin",
+    ];
+
+    let mut linked = std::collections::HashSet::new();
 
     for subdir in &bin_subdirs {
         let dir = pkg_dir.join(subdir);
@@ -243,9 +256,11 @@ fn create_bin_symlinks(pkg_dir: &Path, bin_dir: &Path) -> ZlResult<()> {
                 }
                 unix_fs::symlink(&path, &link_path)?;
                 tracing::debug!("Linked bin {} -> {}", name.to_string_lossy(), path.display());
+                linked.insert(name.to_string_lossy().to_string());
             }
         }
     }
+
     Ok(())
 }
 

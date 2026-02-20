@@ -4,6 +4,7 @@ mod core;
 mod error;
 mod paths;
 mod plugin;
+mod system;
 
 use clap::Parser;
 
@@ -12,6 +13,7 @@ use core::db::ops::ZlDatabase;
 use paths::ZlPaths;
 use plugin::pacman::PacmanPlugin;
 use plugin::{PluginRegistry, SourcePlugin};
+use system::SystemProfile;
 
 fn main() -> anyhow::Result<()> {
     let cli_args = cli::Cli::parse();
@@ -26,6 +28,11 @@ fn main() -> anyhow::Result<()> {
 
     // Load config
     let config = ZlConfig::load()?;
+
+    // Detect system profile (replaces all hardcoded FHS assumptions)
+    let mut profile = SystemProfile::detect();
+    profile.apply_overrides(&config.system);
+    tracing::debug!("System profile: {}", profile);
 
     // Setup paths (CLI --root overrides config)
     let root_override = cli_args
@@ -52,7 +59,7 @@ fn main() -> anyhow::Result<()> {
     // Dispatch commands
     match cli_args.command {
         cli::Commands::Install(args) => {
-            cli::install::handle(args, &zl_paths, &db, &registry, auto_yes)?;
+            cli::install::handle(args, &zl_paths, &db, &registry, &profile, auto_yes)?;
         }
         cli::Commands::Remove(args) => {
             cli::remove::handle(args, &zl_paths, &db, auto_yes)?;
@@ -61,7 +68,7 @@ fn main() -> anyhow::Result<()> {
             cli::search::handle(args, &registry)?;
         }
         cli::Commands::Update(args) => {
-            cli::update::handle(args, &zl_paths, &db, &registry, auto_yes)?;
+            cli::update::handle(args, &zl_paths, &db, &registry, &profile, auto_yes)?;
         }
         cli::Commands::List => {
             cli::list::handle(&db)?;

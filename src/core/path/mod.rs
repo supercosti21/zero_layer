@@ -1,8 +1,9 @@
-pub mod fhs;
 pub mod remapper;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+
+use crate::system::SystemProfile;
 
 /// A complete mapping from source FHS paths to ZL-managed paths
 #[derive(Debug, Clone)]
@@ -22,8 +23,13 @@ pub struct PathMapping {
 }
 
 impl PathMapping {
-    /// Create a mapping for a specific package
-    pub fn for_package(zl_root: &Path, pkg_name: &str, pkg_version: &str) -> Self {
+    /// Create a mapping for a specific package, using the detected system profile.
+    pub fn for_package(
+        zl_root: &Path,
+        pkg_name: &str,
+        pkg_version: &str,
+        profile: &SystemProfile,
+    ) -> Self {
         let pkg_prefix = zl_root
             .join("packages")
             .join(format!("{}-{}", pkg_name, pkg_version));
@@ -31,33 +37,32 @@ impl PathMapping {
         let shared_lib_dir = zl_root.join("lib");
         let shared_bin_dir = zl_root.join("bin");
 
-        let system_interpreter = fhs::detect_system_interpreter();
+        let system_interpreter = profile.interpreter_str();
 
+        // Build prefix_map dynamically from FHS source prefixes.
+        // This maps all standard FHS paths that package contents might reference
+        // to their ZL-managed equivalents.
         let mut prefix_map = HashMap::new();
-        prefix_map.insert(
-            "/usr/lib".into(),
-            shared_lib_dir.to_string_lossy().into_owned(),
-        );
-        prefix_map.insert(
-            "/usr/lib64".into(),
-            shared_lib_dir.to_string_lossy().into_owned(),
-        );
-        prefix_map.insert(
-            "/usr/bin".into(),
-            shared_bin_dir.to_string_lossy().into_owned(),
-        );
-        prefix_map.insert(
-            "/usr/sbin".into(),
-            shared_bin_dir.to_string_lossy().into_owned(),
-        );
-        prefix_map.insert(
-            "/usr/share".into(),
-            zl_root.join("share").to_string_lossy().into_owned(),
-        );
-        prefix_map.insert(
-            "/etc".into(),
-            zl_root.join("etc").to_string_lossy().into_owned(),
-        );
+
+        for (fhs_path, category) in crate::system::paths::fhs_source_prefixes() {
+            let zl_target = match category {
+                "lib" => shared_lib_dir.to_string_lossy().into_owned(),
+                "bin" => shared_bin_dir.to_string_lossy().into_owned(),
+                "share" => zl_root.join("share").to_string_lossy().into_owned(),
+                "etc" => zl_root.join("etc").to_string_lossy().into_owned(),
+                _ => continue,
+            };
+            prefix_map.insert(fhs_path, zl_target);
+        }
+
+        // If the system uses multiarch paths (Debian), add those too
+        if let Some(ref tuple) = profile.multiarch_tuple {
+            let multiarch_lib = format!("/usr/lib/{}", tuple);
+            prefix_map.insert(
+                multiarch_lib,
+                shared_lib_dir.to_string_lossy().into_owned(),
+            );
+        }
 
         Self {
             zl_root: zl_root.to_path_buf(),

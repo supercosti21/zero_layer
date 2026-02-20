@@ -4,6 +4,7 @@ use std::path::Path;
 use crate::core::elf::analysis;
 use crate::error::{ZlError, ZlResult};
 use crate::paths::ZlPaths;
+use crate::system::SystemProfile;
 
 /// Result of verifying a single ELF binary
 #[derive(Debug)]
@@ -27,6 +28,7 @@ pub fn verify_package(
     package_name: &str,
     paths: &ZlPaths,
     lib_index: &HashMap<String, std::path::PathBuf>,
+    profile: &SystemProfile,
 ) -> ZlResult<PackageVerification> {
     let elf_files = analysis::scan_directory(package_dir)?;
     let mut elf_results = Vec::new();
@@ -40,8 +42,8 @@ pub fn verify_package(
             let in_shared = paths.lib.join(needed).exists();
             // Check if it's in our lib_index
             let in_index = lib_index.contains_key(needed.as_str());
-            // Check if it's available on the system
-            let on_system = system_lib_exists(needed);
+            // Check if it's available on the system (using dynamic profile, not hardcoded dirs)
+            let on_system = profile.system_lib_exists(needed);
 
             if !in_shared && !in_index && !on_system {
                 missing_libs.push(needed.clone());
@@ -70,14 +72,6 @@ pub fn verify_package(
         elf_results,
         all_ok,
     })
-}
-
-/// Check standard system library directories for a given library name
-fn system_lib_exists(lib_name: &str) -> bool {
-    use crate::core::path::fhs::FHS_LIB_DIRS;
-    FHS_LIB_DIRS
-        .iter()
-        .any(|dir| Path::new(dir).join(lib_name).exists())
 }
 
 /// Summarize verification results into a human-readable report
@@ -120,8 +114,9 @@ pub fn verify_or_fail(
     package_name: &str,
     paths: &ZlPaths,
     lib_index: &HashMap<String, std::path::PathBuf>,
+    profile: &SystemProfile,
 ) -> ZlResult<()> {
-    let result = verify_package(package_dir, package_name, paths, lib_index)?;
+    let result = verify_package(package_dir, package_name, paths, lib_index, profile)?;
     if result.all_ok {
         Ok(())
     } else {

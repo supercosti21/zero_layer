@@ -2,6 +2,7 @@ use crate::core::db::ops::ZlDatabase;
 use crate::error::{ZlError, ZlResult};
 use crate::paths::ZlPaths;
 use crate::plugin::PluginRegistry;
+use crate::system::SystemProfile;
 
 use super::{InstallArgs, RemoveArgs, UpdateArgs};
 
@@ -10,6 +11,7 @@ pub fn handle(
     paths: &ZlPaths,
     db: &ZlDatabase,
     registry: &PluginRegistry,
+    profile: &SystemProfile,
     _auto_yes: bool,
 ) -> ZlResult<()> {
     // Get list of packages to update
@@ -69,7 +71,7 @@ pub fn handle(
                     from: Some(source_name.to_string()),
                     version: Some(candidate.version.clone()),
                 };
-                super::install::handle(install_args, paths, db, registry, true)?;
+                super::install::handle(install_args, paths, db, registry, profile, true)?;
 
                 updated += 1;
             }
