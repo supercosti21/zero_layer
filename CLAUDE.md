@@ -121,15 +121,14 @@ src/
 - [x] `core/graph/model.rs` — PackageId, PackageNode, DependencyEdge, DepGraph structs
 - [x] `core/db/schema.rs` — redb table definitions (PACKAGES, FILE_OWNERS, LIB_INDEX, DEPENDENCIES, PLUGIN_META)
 
-### Stub files (exist but contain only TODO comments)
-- [ ] `core/graph/resolver.rs` — needs topological sort, cycle detection, orphan detection
-- [ ] `core/graph/verifier.rs` — needs post-install verification logic
-- [ ] `core/db/ops.rs` — needs ZlDatabase struct with CRUD operations
-- [ ] `plugin/pacman/mod.rs` — needs PacmanPlugin implementing SourcePlugin
-- [ ] `plugin/pacman/mirror.rs` — needs mirror list parsing and URL construction
-- [ ] `plugin/pacman/database.rs` — needs sync DB download and parsing
-- [ ] `plugin/pacman/package.rs` — needs .pkg.tar.zst download, extraction, .PKGINFO parsing
+- [x] `core/graph/resolver.rs` — topological sort, cycle detection, orphan detection, install ordering
+- [x] `core/graph/verifier.rs` — post-install ELF verification (missing libs, interpreter checks)
+- [x] `core/db/ops.rs` — ZlDatabase CRUD: packages, file ownership, lib index, plugin metadata
+- [x] `plugin/pacman/mod.rs` — PacmanPlugin implementing full SourcePlugin trait
+- [x] `plugin/pacman/mirror.rs` — mirrorlist parsing, default mirrors, URL construction
+- [x] `plugin/pacman/database.rs` — sync DB download, tar.gz parsing, desc file parsing
+- [x] `plugin/pacman/package.rs` — .pkg.tar.zst download/extract, .PKGINFO parsing, SHA256 verification
 
-### Known issues
-- `core/elf/patcher.rs` line 120: `set_runpath()` passes `&c_runpath` but needs `&*c_runpath` (dereference to `CStr`) — causes compilation error
-- CLI subcommand handlers in `main.rs` are stubs (print "not yet implemented")
+### Not yet implemented
+- [ ] CLI subcommand handlers in `main.rs` — currently stubs (print "not yet implemented")
+- [ ] Wire up the full install/remove/search/update flows connecting CLI -> plugin -> ELF patching -> DB

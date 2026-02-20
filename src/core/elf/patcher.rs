@@ -117,7 +117,7 @@ pub fn set_runpath(path: &Path, new_runpath: &str) -> ZlResult<()> {
         }
     })?;
     patcher
-        .set_dynamic_tag(DynamicTag::Runpath, &c_runpath)
+        .set_dynamic_tag(DynamicTag::Runpath, &*c_runpath)
         .map_err(|e| crate::error::ZlError::ElfPatch {
             path: path.to_path_buf(),
             message: e.to_string(),
