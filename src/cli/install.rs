@@ -4,11 +4,15 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
+
+use crate::core::conflicts;
 use crate::core::db::ops::ZlDatabase;
 use crate::core::elf::{analysis, patcher};
 use crate::core::graph::model::{PackageId, PackageNode};
 use crate::core::path::PathMapping;
 use crate::core::path::remapper;
+use crate::core::transaction::Transaction;
 use crate::error::{ZlError, ZlResult};
 use crate::paths::ZlPaths;
 use crate::plugin::{PackageCandidate, PluginRegistry, SourcePlugin};
@@ -54,10 +58,29 @@ pub fn handle(
         return Ok(());
     }
 
-    // 3. Display install plan
+    // 3. Check for conflicts before proceeding
+    println!("Checking for conflicts...");
+    let candidates_refs: Vec<&PackageCandidate> =
+        plan.packages.iter().map(|e| &e.candidate).collect();
+    let conflict_report = conflicts::check_conflicts(&candidates_refs, db, paths)?;
+
+    if conflict_report.has_conflicts() {
+        conflict_report.display();
+        if !auto_yes {
+            eprintln!("\nConflicts must be resolved before installing.");
+            eprintln!("  hint: remove conflicting packages with `zl remove` first");
+            return Err(ZlError::PackageConflict {
+                installed: "multiple".into(),
+                requested: args.package,
+            });
+        }
+        eprintln!("\nWarning: proceeding despite conflicts (--yes).");
+    }
+
+    // 4. Display install plan
     deps::display_plan(&plan);
 
-    // 4. Confirm
+    // 5. Confirm
     if !auto_yes {
         print!("\nProceed with installation? [Y/n] ");
         use std::io::Write;
@@ -71,22 +94,30 @@ pub fn handle(
         }
     }
 
-    // 5. Download all packages in parallel
+    // 6. Download all packages with progress bars
     let total = plan.packages.len();
     let candidates: Vec<&PackageCandidate> = plan.packages.iter().map(|e| &e.candidate).collect();
 
     println!("\nDownloading {} package(s)...", total);
     let archives = download_parallel(&candidates, plugin, &paths.cache)?;
 
-    // 6. Install each package sequentially in dependency-first order
+    // 7. Install each package with transaction support
+    let mut txn = Transaction::new();
+    let mut installed_count = 0;
+
+    let install_pb = ProgressBar::new(total as u64);
+    install_pb.set_style(
+        ProgressStyle::default_bar()
+            .template("{spinner:.green} [{bar:40.cyan/blue}] {pos}/{len} {msg}")
+            .unwrap_or_else(|_| ProgressStyle::default_bar())
+            .progress_chars("=> "),
+    );
+
     for (i, (entry, archive_path)) in plan.packages.iter().zip(archives.iter()).enumerate() {
-        println!(
-            "\n[{}/{}] Installing {}...",
-            i + 1,
-            total,
-            entry.candidate.name
-        );
-        install_from_archive(
+        install_pb.set_message(format!("Installing {}...", entry.candidate.name));
+        install_pb.set_position(i as u64);
+
+        match install_from_archive(
             &entry.candidate,
             archive_path,
             entry.explicit,
@@ -94,10 +125,31 @@ pub fn handle(
             db,
             plugin,
             profile,
-        )?;
+            &mut txn,
+        ) {
+            Ok(()) => {
+                installed_count += 1;
+            }
+            Err(e) => {
+                install_pb.finish_and_clear();
+                eprintln!(
+                    "\nFailed to install {}: {}",
+                    entry.candidate.name, e
+                );
+                eprintln!("Rolling back {} installed package(s)...", installed_count);
+                txn.rollback(db);
+                return Err(e);
+            }
+        }
     }
 
-    // 7. Summary
+    install_pb.set_position(total as u64);
+    install_pb.finish_and_clear();
+
+    // Commit the transaction — all installs succeeded
+    txn.commit();
+
+    // 8. Summary
     let dep_count = plan.dep_count();
     if dep_count > 0 {
         println!(
@@ -121,31 +173,46 @@ pub fn handle(
     Ok(())
 }
 
-/// Download multiple packages in parallel using thread::scope.
+/// Download multiple packages in parallel using thread::scope with progress bars.
 /// Returns archive paths in the same order as the input candidates.
 fn download_parallel(
     candidates: &[&PackageCandidate],
     plugin: &dyn SourcePlugin,
     cache_dir: &Path,
 ) -> ZlResult<Vec<PathBuf>> {
-    if candidates.len() <= 1 {
-        // No point parallelizing a single download
+    let total = candidates.len();
+
+    if total <= 1 {
         let mut results = Vec::new();
         for candidate in candidates {
-            println!("  Downloading {}...", candidate.name);
-            results.push(plugin.download(candidate, cache_dir)?);
+            let pb = ProgressBar::new_spinner();
+            pb.set_style(
+                ProgressStyle::default_spinner()
+                    .template("  {spinner:.green} Downloading {msg}...")
+                    .unwrap_or_else(|_| ProgressStyle::default_spinner()),
+            );
+            pb.set_message(candidate.name.clone());
+            pb.enable_steady_tick(std::time::Duration::from_millis(100));
+            let result = plugin.download(candidate, cache_dir)?;
+            pb.finish_with_message(format!("{} done", candidate.name));
+            results.push(result);
         }
         return Ok(results);
     }
 
+    let mp = MultiProgress::new();
     let completed = Mutex::new(0usize);
-    let total = candidates.len();
 
-    // Use thread::scope for safe parallel downloads with borrowed references.
-    // Process in chunks to limit concurrency.
-    let mut all_results: Vec<ZlResult<PathBuf>> = Vec::with_capacity(total);
+    let overall = mp.add(ProgressBar::new(total as u64));
+    overall.set_style(
+        ProgressStyle::default_bar()
+            .template("  [{bar:40.cyan/blue}] {pos}/{len} downloads")
+            .unwrap_or_else(|_| ProgressStyle::default_bar())
+            .progress_chars("=> "),
+    );
 
     // Initialize with placeholder errors (will be replaced)
+    let mut all_results: Vec<ZlResult<PathBuf>> = Vec::with_capacity(total);
     for _ in 0..total {
         all_results.push(Err(ZlError::DownloadFailed {
             url: String::new(),
@@ -164,20 +231,32 @@ fn download_parallel(
                 let candidate = candidates[idx];
                 let results_mutex = &results_mutex;
                 let completed = &completed;
+                let overall = &overall;
+                let mp = &mp;
 
                 handles.push(scope.spawn(move || {
+                    let pb = mp.add(ProgressBar::new_spinner());
+                    pb.set_style(
+                        ProgressStyle::default_spinner()
+                            .template("    {spinner:.green} {msg}")
+                            .unwrap_or_else(|_| ProgressStyle::default_spinner()),
+                    );
+                    pb.set_message(format!("Downloading {}...", candidate.name));
+                    pb.enable_steady_tick(std::time::Duration::from_millis(100));
+
                     let result = plugin.download(candidate, cache_dir);
+
                     let mut count = completed.lock().unwrap();
                     *count += 1;
-                    let is_ok = result.is_ok();
-                    println!(
-                        "  [{}/{}] {} {}",
-                        *count,
-                        total,
-                        if is_ok { "Downloaded" } else { "Failed" },
-                        candidate.name
-                    );
+                    overall.set_position(*count as u64);
                     drop(count);
+
+                    let is_ok = result.is_ok();
+                    if is_ok {
+                        pb.finish_with_message(format!("{} downloaded", candidate.name));
+                    } else {
+                        pb.finish_with_message(format!("{} FAILED", candidate.name));
+                    }
 
                     let mut results = results_mutex.lock().unwrap();
                     results[idx] = result;
@@ -189,6 +268,8 @@ fn download_parallel(
             }
         }
     });
+
+    overall.finish_and_clear();
 
     // Collect results, fail on first error
     let results = results_mutex.into_inner().unwrap();
@@ -222,7 +303,8 @@ pub fn install_single_package(
     println!("  Downloading {}...", candidate.name);
     let archive_path = plugin.download(candidate, &paths.cache)?;
 
-    install_from_archive(
+    let mut txn = Transaction::new();
+    match install_from_archive(
         candidate,
         &archive_path,
         explicit,
@@ -230,11 +312,22 @@ pub fn install_single_package(
         db,
         plugin,
         profile,
-    )
+        &mut txn,
+    ) {
+        Ok(()) => {
+            txn.commit();
+            Ok(())
+        }
+        Err(e) => {
+            txn.rollback(db);
+            Err(e)
+        }
+    }
 }
 
 /// Install a package from an already-downloaded archive.
 /// Extracts, patches ELF binaries, remaps scripts, places files, and registers in DB.
+/// Tracks all changes in the transaction for rollback support.
 pub fn install_from_archive(
     candidate: &PackageCandidate,
     archive_path: &Path,
@@ -243,6 +336,7 @@ pub fn install_from_archive(
     db: &ZlDatabase,
     plugin: &dyn SourcePlugin,
     profile: &SystemProfile,
+    txn: &mut Transaction,
 ) -> ZlResult<()> {
     // Check if already installed
     if db
@@ -258,7 +352,6 @@ pub fn install_from_archive(
     }
 
     // Extract
-    println!("  Extracting...");
     let extracted = plugin.extract(archive_path)?;
 
     // Create path mapping (uses SystemProfile for dynamic path detection)
@@ -266,10 +359,6 @@ pub fn install_from_archive(
         PathMapping::for_package(&paths.root, &candidate.name, &candidate.version, profile);
 
     // Patch ELF binaries
-    let elf_count = extracted.elf_files.len();
-    if elf_count > 0 {
-        println!("  Patching {} ELF binaries...", elf_count);
-    }
     for elf_path in &extracted.elf_files {
         match analysis::analyze(elf_path) {
             Ok(info) => {
@@ -284,10 +373,6 @@ pub fn install_from_archive(
     }
 
     // Remap scripts
-    let script_count = extracted.script_files.len();
-    if script_count > 0 {
-        println!("  Remapping {} scripts...", script_count);
-    }
     for script_path in &extracted.script_files {
         let _ = remapper::remap_shebang(script_path, &mapping);
         let _ = remapper::remap_text_file(script_path, &mapping);
@@ -298,6 +383,7 @@ pub fn install_from_archive(
         .packages
         .join(format!("{}-{}", candidate.name, candidate.version));
     std::fs::create_dir_all(&pkg_dir)?;
+    txn.track_dir(&pkg_dir);
 
     let mut installed_files = Vec::new();
     let mut provides_libs = HashMap::new();
@@ -314,6 +400,7 @@ pub fn install_from_archive(
             std::fs::create_dir_all(parent)?;
         }
         std::fs::copy(file, &dest)?;
+        txn.track_file(&dest);
 
         installed_files.push(dest.clone());
 
@@ -328,7 +415,7 @@ pub fn install_from_archive(
     }
 
     // Create symlinks for binaries
-    create_bin_symlinks(&pkg_dir, &paths.bin)?;
+    create_bin_symlinks(&pkg_dir, &paths.bin, txn)?;
 
     // Create symlinks for shared libraries
     for (soname, lib_path) in &provides_libs {
@@ -337,6 +424,7 @@ pub fn install_from_archive(
             std::fs::remove_file(&link_path)?;
         }
         unix_fs::symlink(lib_path, &link_path)?;
+        txn.track_symlink(&link_path);
         tracing::debug!("Linked lib {} -> {}", soname, lib_path.display());
     }
 
@@ -372,6 +460,8 @@ pub fn install_from_archive(
 
     // Register file ownership and lib index
     let pkg_key = format!("{}-{}", candidate.name, candidate.version);
+    txn.track_db_package(&pkg_key);
+
     for file in &installed_files {
         db.register_file(&file.to_string_lossy(), &pkg_key)?;
     }
@@ -398,8 +488,8 @@ pub fn install_from_archive(
         eprintln!("  Warning: {}", report);
     }
 
-    println!(
-        "  Installed {}-{} ({} files)",
+    tracing::info!(
+        "Installed {}-{} ({} files)",
         candidate.name,
         candidate.version,
         installed_files.len()
@@ -409,7 +499,7 @@ pub fn install_from_archive(
 }
 
 /// Find executables inside a package directory and symlink them into bin/.
-fn create_bin_symlinks(pkg_dir: &Path, bin_dir: &Path) -> ZlResult<()> {
+fn create_bin_symlinks(pkg_dir: &Path, bin_dir: &Path, txn: &mut Transaction) -> ZlResult<()> {
     let bin_subdirs = [
         "usr/bin",
         "usr/sbin",
@@ -438,6 +528,7 @@ fn create_bin_symlinks(pkg_dir: &Path, bin_dir: &Path) -> ZlResult<()> {
                     std::fs::remove_file(&link_path)?;
                 }
                 unix_fs::symlink(&path, &link_path)?;
+                txn.track_symlink(&link_path);
                 tracing::debug!(
                     "Linked bin {} -> {}",
                     name.to_string_lossy(),

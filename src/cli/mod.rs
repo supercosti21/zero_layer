@@ -1,11 +1,17 @@
+pub mod cache;
+pub mod completions;
 pub mod deps;
+pub mod info;
 pub mod install;
 pub mod list;
+pub mod lockfile;
+pub mod pin;
 pub mod remove;
 pub mod search;
 pub mod update;
 
 use clap::{Args, Parser, Subcommand};
+use clap_complete::Shell;
 
 #[derive(Parser)]
 #[command(
@@ -47,7 +53,22 @@ pub enum Commands {
     /// Search for packages across sources
     Search(SearchArgs),
     /// List installed packages
-    List,
+    List(ListArgs),
+    /// Show detailed info about an installed package
+    Info(InfoArgs),
+    /// Manage the download cache
+    #[command(subcommand)]
+    Cache(CacheCommand),
+    /// Generate shell completions
+    Completions(CompletionsArgs),
+    /// Pin a package to prevent updates
+    Pin(PinArgs),
+    /// Unpin a package to allow updates
+    Unpin(UnpinArgs),
+    /// Export installed packages to a lockfile
+    Export(ExportArgs),
+    /// Import packages from a lockfile
+    Import(ImportArgs),
 }
 
 #[derive(Args)]
@@ -84,4 +105,61 @@ pub struct SearchArgs {
     /// Limit to a specific source
     #[arg(long)]
     pub from: Option<String>,
+}
+
+#[derive(Args)]
+pub struct ListArgs {
+    /// Show only explicitly installed packages
+    #[arg(long)]
+    pub explicit: bool,
+    /// Show only packages installed as dependencies
+    #[arg(long)]
+    pub deps: bool,
+    /// Show orphaned dependencies (no longer needed)
+    #[arg(long)]
+    pub orphans: bool,
+}
+
+#[derive(Args)]
+pub struct InfoArgs {
+    /// Package name
+    pub package: String,
+}
+
+#[derive(Subcommand)]
+pub enum CacheCommand {
+    /// List cached files and their sizes
+    List,
+    /// Remove all cached files
+    Clean,
+}
+
+#[derive(Args)]
+pub struct CompletionsArgs {
+    /// Shell to generate completions for
+    pub shell: Shell,
+}
+
+#[derive(Args)]
+pub struct PinArgs {
+    /// Package name to pin
+    pub package: String,
+}
+
+#[derive(Args)]
+pub struct UnpinArgs {
+    /// Package name to unpin
+    pub package: String,
+}
+
+#[derive(Args)]
+pub struct ExportArgs {
+    /// Output file path (default: zl-lock.json)
+    pub file: Option<std::path::PathBuf>,
+}
+
+#[derive(Args)]
+pub struct ImportArgs {
+    /// Lockfile path to import
+    pub file: std::path::PathBuf,
 }

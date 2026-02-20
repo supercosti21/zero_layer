@@ -38,6 +38,14 @@ fn main() {
 }
 
 fn run(cli_args: cli::Cli) -> anyhow::Result<()> {
+    // Shell completions can run without any setup
+    if let cli::Commands::Completions(ref args) = cli_args.command {
+        cli::completions::handle(cli::CompletionsArgs {
+            shell: args.shell,
+        })?;
+        return Ok(());
+    }
+
     // Load config
     let config = ZlConfig::load()?;
 
@@ -82,8 +90,29 @@ fn run(cli_args: cli::Cli) -> anyhow::Result<()> {
         cli::Commands::Update(args) => {
             cli::update::handle(args, &zl_paths, &db, &registry, &profile, auto_yes)?;
         }
-        cli::Commands::List => {
-            cli::list::handle(&db)?;
+        cli::Commands::List(args) => {
+            cli::list::handle(args, &db)?;
+        }
+        cli::Commands::Info(args) => {
+            cli::info::handle(args, &db)?;
+        }
+        cli::Commands::Cache(cmd) => {
+            cli::cache::handle(cmd, &zl_paths)?;
+        }
+        cli::Commands::Completions(_) => {
+            unreachable!("handled above");
+        }
+        cli::Commands::Pin(args) => {
+            cli::pin::handle_pin(args, &db)?;
+        }
+        cli::Commands::Unpin(args) => {
+            cli::pin::handle_unpin(args, &db)?;
+        }
+        cli::Commands::Export(args) => {
+            cli::lockfile::handle_export(args, &db)?;
+        }
+        cli::Commands::Import(args) => {
+            cli::lockfile::handle_import(args, &db)?;
         }
     }
 

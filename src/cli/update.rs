@@ -38,10 +38,18 @@ pub fn handle(
     }
 
     let mut updated = 0;
+    let mut skipped_pinned = 0;
 
     for pkg in &packages {
         // Only update explicitly installed packages
         if !pkg.explicit {
+            continue;
+        }
+
+        // Skip pinned packages
+        if db.is_pinned(&pkg.id.name)? {
+            tracing::info!("{} is pinned, skipping update", pkg.id.name);
+            skipped_pinned += 1;
             continue;
         }
 
@@ -91,6 +99,10 @@ pub fn handle(
         println!("All packages are up to date.");
     } else {
         println!("\n{} package(s) updated.", updated);
+    }
+
+    if skipped_pinned > 0 {
+        println!("{} pinned package(s) skipped.", skipped_pinned);
     }
 
     Ok(())

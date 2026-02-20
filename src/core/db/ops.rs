@@ -2,7 +2,7 @@ use std::path::Path;
 
 use redb::{Database, ReadableTable};
 
-use super::schema::{DEPENDENCIES, FILE_OWNERS, LIB_INDEX, PACKAGES, PLUGIN_META};
+use super::schema::{DEPENDENCIES, FILE_OWNERS, LIB_INDEX, PACKAGES, PINNED, PLUGIN_META};
 use crate::core::graph::model::PackageNode;
 use crate::error::{ZlError, ZlResult};
 
@@ -26,6 +26,7 @@ impl ZlDatabase {
             let _ = txn.open_table(LIB_INDEX);
             let _ = txn.open_table(DEPENDENCIES);
             let _ = txn.open_table(PLUGIN_META);
+            let _ = txn.open_table(PINNED);
         }
         txn.commit()
             .map_err(|e| ZlError::Config(format!("Failed to commit init: {}", e)))?;
@@ -391,6 +392,7 @@ impl ZlDatabase {
     }
 
     /// Read plugin metadata
+    #[allow(dead_code)]
     pub fn get_plugin_meta(&self, plugin_name: &str) -> ZlResult<Option<Vec<u8>>> {
         let txn = self
             .db
@@ -406,6 +408,80 @@ impl ZlDatabase {
             Some(v) => Ok(Some(v.value().to_vec())),
             None => Ok(None),
         }
+    }
+    // ── Package pinning ──
+
+    /// Pin a package at its current version (prevents updates)
+    pub fn pin_package(&self, name: &str, version: &str) -> ZlResult<()> {
+        let txn = self
+            .db
+            .begin_write()
+            .map_err(|e| ZlError::Config(e.to_string()))?;
+        {
+            let mut table = txn
+                .open_table(PINNED)
+                .map_err(|e| ZlError::Config(e.to_string()))?;
+            table
+                .insert(name, version)
+                .map_err(|e| ZlError::Config(e.to_string()))?;
+        }
+        txn.commit().map_err(|e| ZlError::Config(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Unpin a package (allow updates again)
+    pub fn unpin_package(&self, name: &str) -> ZlResult<bool> {
+        let txn = self
+            .db
+            .begin_write()
+            .map_err(|e| ZlError::Config(e.to_string()))?;
+        let removed = {
+            let mut table = txn
+                .open_table(PINNED)
+                .map_err(|e| ZlError::Config(e.to_string()))?;
+            table
+                .remove(name)
+                .map_err(|e| ZlError::Config(e.to_string()))?
+                .is_some()
+        };
+        txn.commit().map_err(|e| ZlError::Config(e.to_string()))?;
+        Ok(removed)
+    }
+
+    /// Check if a package is pinned
+    pub fn is_pinned(&self, name: &str) -> ZlResult<bool> {
+        let txn = self
+            .db
+            .begin_read()
+            .map_err(|e| ZlError::Config(e.to_string()))?;
+        let table = txn
+            .open_table(PINNED)
+            .map_err(|e| ZlError::Config(e.to_string()))?;
+        Ok(table
+            .get(name)
+            .map_err(|e| ZlError::Config(e.to_string()))?
+            .is_some())
+    }
+
+    /// List all pinned packages: returns (name, pinned_version)
+    pub fn list_pinned(&self) -> ZlResult<Vec<(String, String)>> {
+        let txn = self
+            .db
+            .begin_read()
+            .map_err(|e| ZlError::Config(e.to_string()))?;
+        let table = txn
+            .open_table(PINNED)
+            .map_err(|e| ZlError::Config(e.to_string()))?;
+        let mut pinned = Vec::new();
+
+        let iter = table
+            .iter()
+            .map_err(|e: redb::StorageError| ZlError::Config(e.to_string()))?;
+        for entry in iter {
+            let (k, v) = entry.map_err(|e: redb::StorageError| ZlError::Config(e.to_string()))?;
+            pinned.push((k.value().to_string(), v.value().to_string()));
+        }
+        Ok(pinned)
     }
 }
 
@@ -506,5 +582,21 @@ mod tests {
         // chromium's dep on gtk3 should still exist
         let rdeps = db.reverse_dependencies("gtk3").unwrap();
         assert_eq!(rdeps.len(), 1);
+    }
+
+    #[test]
+    fn test_pin_unpin() {
+        let db = test_db();
+        db.pin_package("firefox", "120.0").unwrap();
+        assert!(db.is_pinned("firefox").unwrap());
+        assert!(!db.is_pinned("chrome").unwrap());
+
+        let pinned = db.list_pinned().unwrap();
+        assert_eq!(pinned.len(), 1);
+        assert_eq!(pinned[0], ("firefox".to_string(), "120.0".to_string()));
+
+        assert!(db.unpin_package("firefox").unwrap());
+        assert!(!db.is_pinned("firefox").unwrap());
+        assert!(db.list_pinned().unwrap().is_empty());
     }
 }
