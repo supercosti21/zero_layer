@@ -42,10 +42,6 @@ src/
   paths.rs             # ZL directory layout (~/.local/share/zl/)
   cli/
     mod.rs             # Cli struct (clap derive), Commands enum
-    install.rs         # Install subcommand handler
-    remove.rs          # Remove subcommand handler
-    search.rs          # Search subcommand handler
-    update.rs          # Update subcommand handler
   core/
     elf/
       analysis.rs      # Read ELF metadata with goblin (interpreter, needed libs, rpath, soname)
@@ -108,36 +104,32 @@ src/
 
 ## Implementation Status (Phase 1: Core + Pacman plugin)
 
-### COMPLETED
-- [x] Project skeleton: cargo init, Cargo.toml with all dependencies, directory structure
-- [x] `error.rs` — ZlError enum with all variants
-- [x] `paths.rs` — ZlPaths struct
-- [x] `config.rs` — ZlConfig, PluginConfig deserialization
+### Fully implemented
+- [x] Project skeleton: Cargo.toml with all dependencies, full directory structure
+- [x] `error.rs` — ZlError enum with all variants, ZlResult alias
+- [x] `paths.rs` — ZlPaths struct with ensure_dirs()
+- [x] `config.rs` — ZlConfig, GeneralConfig, PluginConfig deserialization
+- [x] `cli/mod.rs` — Cli struct, Commands enum, all arg structs (clap derive)
+- [x] `main.rs` — CLI dispatch (stub handlers, tracing init)
+- [x] `lib.rs` — Re-exports core modules
 - [x] `core/elf/analysis.rs` — Full ELF analysis with goblin (analyze, scan_directory, is_elf_file)
 - [x] `core/elf/patcher.rs` — ELF patching with elb (patch_for_zl, set_interpreter, set_runpath)
 - [x] `core/path/mod.rs` — PathMapping struct with remap logic
 - [x] `core/path/fhs.rs` — FHS constants and interpreter detection
 - [x] `core/path/remapper.rs` — Text file and shebang remapping
+- [x] `plugin/mod.rs` — SourcePlugin trait, PackageCandidate, ExtractedPackage, PluginRegistry
+- [x] `core/graph/model.rs` — PackageId, PackageNode, DependencyEdge, DepGraph structs
+- [x] `core/db/schema.rs` — redb table definitions (PACKAGES, FILE_OWNERS, LIB_INDEX, DEPENDENCIES, PLUGIN_META)
 
-### NOT YET CREATED (files don't exist yet)
-- [ ] `src/lib.rs` — needs to re-export core modules
-- [ ] `src/main.rs` — needs CLI dispatch (currently has cargo init default)
-- [ ] `src/cli/mod.rs` — Cli struct with clap derive
-- [ ] `src/cli/install.rs`, `remove.rs`, `search.rs`, `update.rs` — subcommand handlers
-- [ ] `src/core/graph/model.rs` — PackageId, PackageNode, DependencyEdge, DepGraph
-- [ ] `src/core/graph/resolver.rs` — dependency resolution
-- [ ] `src/core/graph/verifier.rs` — post-install verification
-- [ ] `src/core/db/schema.rs` — redb table definitions
-- [ ] `src/core/db/ops.rs` — ZlDatabase CRUD
-- [ ] `src/plugin/mod.rs` — SourcePlugin trait, PackageCandidate, ExtractedPackage, PluginRegistry
-- [ ] `src/plugin/pacman/mod.rs` — PacmanPlugin
-- [ ] `src/plugin/pacman/mirror.rs` — mirror list parsing
-- [ ] `src/plugin/pacman/database.rs` — sync DB parsing
-- [ ] `src/plugin/pacman/package.rs` — .pkg.tar.zst handling
+### Stub files (exist but contain only TODO comments)
+- [ ] `core/graph/resolver.rs` — needs topological sort, cycle detection, orphan detection
+- [ ] `core/graph/verifier.rs` — needs post-install verification logic
+- [ ] `core/db/ops.rs` — needs ZlDatabase struct with CRUD operations
+- [ ] `plugin/pacman/mod.rs` — needs PacmanPlugin implementing SourcePlugin
+- [ ] `plugin/pacman/mirror.rs` — needs mirror list parsing and URL construction
+- [ ] `plugin/pacman/database.rs` — needs sync DB download and parsing
+- [ ] `plugin/pacman/package.rs` — needs .pkg.tar.zst download, extraction, .PKGINFO parsing
 
-### NOT YET VERIFIED
-- The project has NOT been compiled yet (`cargo build` not run)
-- The `elb` crate API needs verification against actual docs during implementation
-
-## Full implementation plan
-See `.claude/plans/radiant-floating-corbato.md` for the complete Phase 1 plan with detailed code sketches, data flow, and step-by-step implementation sequence.
+### Known issues
+- `core/elf/patcher.rs` line 120: `set_runpath()` passes `&c_runpath` but needs `&*c_runpath` (dereference to `CStr`) — causes compilation error
+- CLI subcommand handlers in `main.rs` are stubs (print "not yet implemented")
