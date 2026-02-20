@@ -43,7 +43,7 @@ cargo fmt -- --check     # Check formatting without modifying files
 src/
   main.rs              # Entry point: CLI parsing + SystemProfile detection + dispatch
   lib.rs               # Re-exports core public API
-  error.rs             # ZlError enum (thiserror), ZlResult type alias
+  error.rs             # ZlError enum (thiserror), ZlResult type alias, retry_with_backoff()
   config.rs            # Config parsing (~/.config/zl/config.toml), SystemConfig for overrides
   paths.rs             # ZL directory layout (~/.local/share/zl/)
   system/
@@ -55,12 +55,16 @@ src/
     detect.rs          # System layout detection (FHS, MergedUsr, NixOS, Guix, Termux, GoboLinux)
   cli/
     mod.rs             # Cli struct (clap derive), Commands enum
-    install.rs         # Install subcommand handler (full flow, uses SystemProfile)
-    remove.rs          # Remove subcommand handler
+    deps.rs            # Dependency resolution: recursive resolve, install plan, cycle detection
+    install.rs         # Install: dep resolution, parallel download, sequential install
+    remove.rs          # Remove: delete files, symlinks, deps, DB entries, cascade orphans
     search.rs          # Search subcommand handler
-    update.rs          # Update subcommand handler (uses SystemProfile)
+    update.rs          # Update: check newer versions, remove old + install new
     list.rs            # List subcommand handler
   core/
+    build/
+      mod.rs           # BuildSpec, BuildSystem enum, detect_build_system(), build_package()
+      systems.rs       # Build system implementations: autotools, cmake, meson, cargo, make
     elf/
       analysis.rs      # Read ELF metadata with goblin (interpreter, needed libs, rpath, soname)
       patcher.rs       # Patch ELF with elb (set interpreter, set runpath) — uses profile.page_size
@@ -73,22 +77,24 @@ src/
       verifier.rs      # Post-install verification — uses profile.lib_dirs for lib search
     db/
       schema.rs        # redb table definitions (PACKAGES, FILE_OWNERS, LIB_INDEX, DEPENDENCIES)
-      ops.rs           # CRUD operations on the database
+      ops.rs           # CRUD: packages, file ownership, lib index, dependencies, plugin metadata
   plugin/
     mod.rs             # SourcePlugin trait, PackageCandidate, ExtractedPackage, PluginRegistry
     pacman/
-      mod.rs           # PacmanPlugin implementing SourcePlugin
+      mod.rs           # PacmanPlugin: SourcePlugin + provides-based resolution
       mirror.rs        # Mirror list parsing and URL construction
-      database.rs      # Sync DB download/parsing (pacman desc format)
-      package.rs       # .pkg.tar.zst download, extraction, .PKGINFO parsing
+      database.rs      # Sync DB download/parsing with retry (pacman desc format)
+      package.rs       # .pkg.tar.zst download with retry, extraction, .PKGINFO parsing
 ```
 
 ### Key abstractions
 - **SystemProfile** (`system/mod.rs`): auto-detected host profile (arch, interpreter, libc, lib dirs, layout). Built once at startup, passed to all modules. Replaces all hardcoded FHS assumptions.
 - **SourcePlugin trait** (`plugin/mod.rs`): interface every package source implements (search, resolve, download, extract, sync)
+- **InstallPlan** (`cli/deps.rs`): result of recursive dependency resolution — ordered list of packages to install
 - **PathMapping** (`core/path/mod.rs`): maps FHS paths to ZL-managed paths for a specific package, using SystemProfile
+- **BuildSpec/BuildSystem** (`core/build/mod.rs`): source build specification with auto-detection of build systems
 - **DepGraph** (`core/graph/model.rs`): petgraph-based dependency graph tracking all packages and their relationships
-- **ZlDatabase** (`core/db/ops.rs`): redb-based persistent storage for installed packages, file ownership, library index
+- **ZlDatabase** (`core/db/ops.rs`): redb-based persistent storage for installed packages, file ownership, library index, dependency tracking
 
 ### Key crates
 | Crate | Purpose |
@@ -120,7 +126,8 @@ src/
 - **RUNPATH over RPATH**: modern standard, respects LD_LIBRARY_PATH
 - **redb over SQLite**: pure Rust, maintains single-binary zero-deps constraint
 - **elb over shelling out to patchelf**: pure Rust, no external dependency
-- **Sync HTTP for Phase 1**: simpler; async for parallel downloads in future phases
+- **Parallel downloads with thread::scope**: up to 4 concurrent downloads, no tokio needed
+- **Retry with exponential backoff**: all HTTP operations retry up to 3 times (1s, 2s, 4s)
 
 ### SystemProfile detection chain
 1. **Architecture**: `std::env::consts::ARCH` (compile-time, always correct for running binary)
@@ -141,52 +148,44 @@ src/
 - GoboLinux
 - Any architecture: x86_64, aarch64, armv7, riscv64, i686, s390x, ppc64le
 
-## Implementation Status (Phase 1: Core + Pacman plugin + Universal distro support)
+## Implementation Status
 
-### Fully implemented
+### Phase 1: Core + Pacman plugin + Universal distro support (complete)
 - [x] Project skeleton: Cargo.toml with all dependencies, full directory structure
-- [x] `error.rs` — ZlError enum with all variants, ZlResult alias
+- [x] `error.rs` — ZlError enum with all variants, ZlResult alias, retry_with_backoff()
 - [x] `paths.rs` — ZlPaths struct with ensure_dirs()
 - [x] `config.rs` — ZlConfig, GeneralConfig, SystemConfig, PluginConfig deserialization
 - [x] `cli/mod.rs` — Cli struct, Commands enum, all arg structs (clap derive)
-- [x] `cli/install.rs` — Full install flow: sync, resolve, download, extract, patch, remap, symlink, DB (uses SystemProfile)
-- [x] `cli/remove.rs` — Remove: delete files, symlinks, DB entries, cascade orphans
-- [x] `cli/search.rs` — Search across plugins, sync + display results
-- [x] `cli/update.rs` — Update: check newer versions, remove old + install new (uses SystemProfile)
-- [x] `cli/list.rs` — List installed packages from DB
 - [x] `main.rs` — Full bootstrap: config, SystemProfile detection, paths, DB, plugin registry, CLI dispatch
 - [x] `lib.rs` — Re-exports core modules including system
-- [x] `system/mod.rs` — SystemProfile struct, detect(), apply_overrides(), system_lib_exists()
-- [x] `system/arch.rs` — Arch enum, detect(), from_str(), is_64bit(), pacman_name()
-- [x] `system/interpreter.rs` — detect_interpreter() via PT_INTERP of /bin/sh, fallback scan
-- [x] `system/libc.rs` — LibC enum, detect_libc() from interpreter path, version detection
-- [x] `system/paths.rs` — discover_lib_dirs(), discover_bin_dirs(), detect_multiarch_tuple(), fhs_source_prefixes()
-- [x] `system/detect.rs` — SystemLayout enum, detect_layout(), detect_page_size() via sysconf
-- [x] `core/elf/analysis.rs` — Full ELF analysis with goblin (analyze, scan_directory, is_elf_file)
-- [x] `core/elf/patcher.rs` — ELF patching with elb, uses profile.page_size (not hardcoded)
-- [x] `core/path/mod.rs` — PathMapping with dynamic prefix_map from SystemProfile (includes multiarch)
-- [x] `core/path/remapper.rs` — Text file and shebang remapping
-- [x] `plugin/mod.rs` — SourcePlugin trait, PackageCandidate, ExtractedPackage, PluginRegistry
-- [x] `core/graph/model.rs` — PackageId, PackageNode, DependencyEdge, DepGraph structs
-- [x] `core/db/schema.rs` — redb table definitions (PACKAGES, FILE_OWNERS, LIB_INDEX, DEPENDENCIES, PLUGIN_META)
-- [x] `core/graph/resolver.rs` — topological sort, cycle detection, orphan detection, install ordering
-- [x] `core/graph/verifier.rs` — post-install ELF verification using profile.lib_dirs (not hardcoded FHS_LIB_DIRS)
-- [x] `core/db/ops.rs` — ZlDatabase CRUD: packages, file ownership, lib index, plugin metadata
-- [x] `plugin/pacman/mod.rs` — PacmanPlugin implementing full SourcePlugin trait
-- [x] `plugin/pacman/mirror.rs` — mirrorlist parsing, default mirrors, URL construction
-- [x] `plugin/pacman/database.rs` — sync DB download, tar.gz parsing, desc file parsing
-- [x] `plugin/pacman/package.rs` — .pkg.tar.zst download/extract, .PKGINFO parsing, SHA256 verification
+- [x] `system/` — Full SystemProfile detection (arch, interpreter, libc, lib dirs, layout)
+- [x] `core/elf/` — ELF analysis (goblin) and patching (elb) with dynamic page size
+- [x] `core/path/` — PathMapping with dynamic prefix map, script/shebang remapping
+- [x] `core/graph/` — DepGraph, topological sort, cycle detection, orphan detection, verification
+- [x] `core/db/` — redb tables, CRUD for packages/files/libs/deps/plugin metadata
+- [x] `plugin/pacman/` — Full PacmanPlugin: sync, search, resolve, download, extract
 
-### Phase 1 complete
-All core modules, the Pacman plugin, and the SystemProfile detection system are fully implemented and wired together.
-The project compiles and all 27 tests pass (including 15 new system detection tests).
+### Phase 2: Dep resolution + Parallel downloads + Source builds + Error handling (complete)
+- [x] `error.rs` — Expanded ZlError: 15+ variants with user-friendly suggestions, retry_with_backoff()
+- [x] `cli/deps.rs` — Recursive dependency resolution with cycle detection, install plan display
+- [x] `cli/install.rs` — Full dep resolution, parallel downloads (4 threads), sequential install
+- [x] `cli/remove.rs` — Improved orphan detection using dep table + lib needs
+- [x] `cli/update.rs` — Uses install_single_package(), only updates explicit packages
+- [x] `core/build/mod.rs` — BuildSpec, BuildSystem enum, detect_build_system(), build_package()
+- [x] `core/build/systems.rs` — Autotools, CMake, Meson, Cargo, Make, custom script builders
+- [x] `core/db/ops.rs` — Dependency tracking: register, get, reverse lookup, remove
+- [x] `plugin/pacman/mod.rs` — Provides-based virtual package resolution (fallback in resolve())
+- [x] `plugin/pacman/package.rs` — Download with retry (3 attempts, exponential backoff), checksum cache
+- [x] `plugin/pacman/database.rs` — DB sync with retry (3 attempts, exponential backoff)
+
+### All tests pass: 34 tests
+The project compiles and all 34 tests pass.
 
 ### Removed
 - `core/path/fhs.rs` — replaced by `system/` module. No more hardcoded FHS constants.
 
-### Future work (Phase 2+)
+### Future work (Phase 3+)
 - [ ] Additional plugins: APT, RPM, AppImage, GitHub Releases, pip, npm, cargo
-- [ ] Async HTTP for parallel downloads
-- [ ] Dependency auto-resolution (auto-install missing deps from same source)
 - [ ] Cross-OS support (macOS/Homebrew via HostAdapter trait)
-- [ ] Source build fallback (compile from source when binary is incompatible)
+- [ ] Progress bars for downloads (indicatif is already in deps)
+- [ ] Interactive conflict resolution (dialoguer is already in deps)

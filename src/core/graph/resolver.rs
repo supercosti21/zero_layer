@@ -1,9 +1,9 @@
+use petgraph::Direction;
 use petgraph::algo::{is_cyclic_directed, toposort};
 use petgraph::graph::NodeIndex;
-use petgraph::Direction;
 use std::collections::HashSet;
 
-use super::model::{DepGraph, DependencyEdge, DepType, PackageNode};
+use super::model::{DepGraph, DepType, DependencyEdge, PackageNode};
 use crate::error::{ZlError, ZlResult};
 
 impl DepGraph {
@@ -71,10 +71,10 @@ impl DepGraph {
     pub fn topological_order(&self) -> ZlResult<Vec<NodeIndex>> {
         toposort(&self.graph, None).map_err(|cycle| {
             let node = &self.graph[cycle.node_id()];
-            ZlError::DependencyResolution(format!(
-                "Dependency cycle detected involving package: {}-{}",
-                node.id.name, node.id.version
-            ))
+            ZlError::DependencyResolution {
+                package: format!("{}-{}", node.id.name, node.id.version),
+                message: "Dependency cycle detected".into(),
+            }
         })
     }
 

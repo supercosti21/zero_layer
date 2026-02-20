@@ -58,7 +58,12 @@ impl Arch {
     pub fn is_64bit(&self) -> bool {
         matches!(
             self,
-            Arch::X86_64 | Arch::Aarch64 | Arch::Riscv64 | Arch::S390x | Arch::Ppc64le | Arch::Mips64
+            Arch::X86_64
+                | Arch::Aarch64
+                | Arch::Riscv64
+                | Arch::S390x
+                | Arch::Ppc64le
+                | Arch::Mips64
         )
     }
 

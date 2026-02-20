@@ -58,7 +58,12 @@ impl SystemProfile {
         let bin_dirs = paths::discover_bin_dirs(&layout);
         let multiarch_tuple = paths::detect_multiarch_tuple();
 
-        tracing::info!("System profile: arch={}, layout={}, libc={}", arch, layout, libc_type);
+        tracing::info!(
+            "System profile: arch={}, layout={}, libc={}",
+            arch,
+            layout,
+            libc_type
+        );
         tracing::debug!("Interpreter: {}", interpreter.display());
         tracing::debug!("Page size: {}", page_size);
         tracing::debug!("Lib dirs: {} found", lib_dirs.len());
@@ -148,9 +153,19 @@ mod tests {
         // Basic sanity checks
         assert_ne!(profile.arch, Arch::Unknown);
         assert!(profile.page_size >= 4096);
-        assert!(profile.interpreter.exists(), "Interpreter should exist: {:?}", profile.interpreter);
-        assert!(!profile.lib_dirs.is_empty(), "Should find at least one lib dir");
-        assert!(!profile.bin_dirs.is_empty(), "Should find at least one bin dir");
+        assert!(
+            profile.interpreter.exists(),
+            "Interpreter should exist: {:?}",
+            profile.interpreter
+        );
+        assert!(
+            !profile.lib_dirs.is_empty(),
+            "Should find at least one lib dir"
+        );
+        assert!(
+            !profile.bin_dirs.is_empty(),
+            "Should find at least one bin dir"
+        );
 
         println!("Profile: {}", profile);
         println!("Interpreter: {:?}", profile.interpreter);

@@ -42,7 +42,7 @@ pub fn is_elf_file(path: &Path) -> bool {
 
 /// Analyze a single ELF file, extracting all relevant metadata
 pub fn analyze(path: &Path) -> ZlResult<ElfInfo> {
-    use goblin::elf::{header, Elf};
+    use goblin::elf::{Elf, header};
 
     let data = std::fs::read(path)?;
     let elf = Elf::parse(&data).map_err(|e| crate::error::ZlError::ElfAnalysis {

@@ -58,10 +58,7 @@ impl PathMapping {
         // If the system uses multiarch paths (Debian), add those too
         if let Some(ref tuple) = profile.multiarch_tuple {
             let multiarch_lib = format!("/usr/lib/{}", tuple);
-            prefix_map.insert(
-                multiarch_lib,
-                shared_lib_dir.to_string_lossy().into_owned(),
-            );
+            prefix_map.insert(multiarch_lib, shared_lib_dir.to_string_lossy().into_owned());
         }
 
         Self {

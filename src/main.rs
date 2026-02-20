@@ -15,7 +15,7 @@ use plugin::pacman::PacmanPlugin;
 use plugin::{PluginRegistry, SourcePlugin};
 use system::SystemProfile;
 
-fn main() -> anyhow::Result<()> {
+fn main() {
     let cli_args = cli::Cli::parse();
 
     tracing_subscriber::fmt()
@@ -26,6 +26,18 @@ fn main() -> anyhow::Result<()> {
         })
         .init();
 
+    if let Err(e) = run(cli_args) {
+        eprintln!("error: {}", e);
+        if let Some(zl_err) = e.downcast_ref::<error::ZlError>() {
+            if let Some(hint) = zl_err.suggestion() {
+                eprintln!("  hint: {}", hint);
+            }
+        }
+        std::process::exit(1);
+    }
+}
+
+fn run(cli_args: cli::Cli) -> anyhow::Result<()> {
     // Load config
     let config = ZlConfig::load()?;
 

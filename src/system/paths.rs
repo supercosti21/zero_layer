@@ -315,7 +315,10 @@ mod tests {
     #[test]
     fn test_discover_lib_dirs_not_empty() {
         let dirs = discover_lib_dirs(&SystemLayout::FHS);
-        assert!(!dirs.is_empty(), "Should find at least some lib directories");
+        assert!(
+            !dirs.is_empty(),
+            "Should find at least some lib directories"
+        );
         // At least /usr/lib or /lib should exist on any Linux
         assert!(
             dirs.iter().any(|d| d.to_string_lossy().contains("lib")),

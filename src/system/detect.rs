@@ -137,7 +137,11 @@ mod tests {
         let ps = detect_page_size();
         // Page size should be a power of 2, at least 4096
         assert!(ps >= 4096, "Page size should be >= 4096, got {}", ps);
-        assert!(ps.is_power_of_two(), "Page size should be power of 2, got {}", ps);
+        assert!(
+            ps.is_power_of_two(),
+            "Page size should be power of 2, got {}",
+            ps
+        );
     }
 
     #[test]

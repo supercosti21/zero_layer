@@ -14,13 +14,14 @@ Install packages from any source — pacman, apt, rpm, AppImage, GitHub releases
 zl install firefox --from pacman
 ```
 
-1. **Download** the package from the selected source (Arch repos, Debian repos, GitHub, etc.)
-2. **Analyze** all ELF binaries — detect interpreters, shared library dependencies, RPATH/RUNPATH
-3. **Patch** binaries — set the correct dynamic linker and RUNPATH for the target system
-4. **Remap** hardcoded FHS paths (`/usr/lib`, `/usr/bin`, `/etc`) to ZL-managed directories
-5. **Patch** scripts and config files, rewriting shebangs and embedded paths
-6. **Track** every file in a dependency graph and persistent database
-7. **Verify** that all ELF binaries can resolve their dependencies post-install
+1. **Resolve** dependencies recursively — find all transitive deps from the source
+2. **Download** all packages in parallel (up to 4 concurrent) with retry
+3. **Analyze** all ELF binaries — detect interpreters, shared library dependencies, RPATH/RUNPATH
+4. **Patch** binaries — set the correct dynamic linker and RUNPATH for the target system
+5. **Remap** hardcoded FHS paths (`/usr/lib`, `/usr/bin`, `/etc`) to ZL-managed directories
+6. **Patch** scripts and config files, rewriting shebangs and embedded paths
+7. **Track** every file in a dependency graph and persistent database
+8. **Verify** that all ELF binaries can resolve their dependencies post-install
 
 All translation happens at install time. Once installed, a package runs with zero overhead.
 
@@ -108,10 +109,58 @@ ZL auto-detects the host system at startup — no manual configuration needed. I
 
 This means ZL works on any Linux distro without hardcoded assumptions: Arch, Ubuntu, Fedora, Alpine (musl), NixOS, Void, Gentoo, Clear Linux, Termux on Android, and more.
 
+### Automatic Dependency Resolution
+
+When you install a package, ZL automatically resolves and installs all dependencies:
+
+```
+$ zl install firefox
+Syncing package database from Arch Linux (pacman)...
+Resolving dependencies...
+
+Dependencies to install (12):
+  dbus-glib 0.112-3 (0.4 MB)
+  gtk3 3.24.39-1 (23.1 MB)
+  libxt 1.3.0-1 (0.3 MB)
+  ...
+
+Packages to install (1):
+  firefox 120.0-1 (238.0 MB)
+
+Total installed size: 285.4 MB
+
+Proceed with installation? [Y/n]
+
+Downloading 13 package(s)...
+  [1/13] Downloaded dbus-glib
+  [2/13] Downloaded gtk3
+  ...
+
+[1/13] Installing dbus-glib...
+[2/13] Installing gtk3...
+...
+[13/13] Installing firefox...
+
+Installed 1 package(s) + 12 dependency(ies).
+```
+
+Dependencies are downloaded in parallel (up to 4 at a time) and installed in correct dependency order. Virtual packages (e.g., `sh` provided by `bash`) are resolved automatically.
+
+### Source Build Support
+
+ZL can build packages from source when precompiled binaries aren't available. It auto-detects the build system:
+
+- **Autotools** — `./configure && make && make install`
+- **CMake** — `cmake -B build && cmake --build build`
+- **Meson** — `meson setup build && ninja -C build`
+- **Cargo** — `cargo build --release` (Rust projects)
+- **Make** — simple Makefile projects
+
 ### Key Design Choices
 
 - **Pure Rust, single binary** — no C dependencies, no dynamic linking required
 - **Dynamic system detection** — all paths and interpreters auto-detected, never hardcoded
+- **Parallel downloads** — up to 4 concurrent downloads with retry and exponential backoff
 - **ELF patching with `elb`** — pure-Rust patchelf alternative, sets interpreter and RUNPATH
 - **RUNPATH over RPATH** — modern standard, respects `LD_LIBRARY_PATH`
 - **`redb` database** — pure-Rust embedded key-value store (ACID, no SQLite/C dependency)

@@ -4,16 +4,13 @@ use crate::paths::ZlPaths;
 
 use super::RemoveArgs;
 
-pub fn handle(
-    args: RemoveArgs,
-    paths: &ZlPaths,
-    db: &ZlDatabase,
-    auto_yes: bool,
-) -> ZlResult<()> {
+pub fn handle(args: RemoveArgs, paths: &ZlPaths, db: &ZlDatabase, auto_yes: bool) -> ZlResult<()> {
     // 1. Find package in DB
     let node = db
         .get_package_by_name(&args.package)?
-        .ok_or_else(|| ZlError::PackageNotFound(args.package.clone()))?;
+        .ok_or_else(|| ZlError::PackageNotFound {
+            name: args.package.clone(),
+        })?;
 
     let pkg_key = format!("{}-{}", node.id.name, node.id.version);
 
@@ -58,8 +55,9 @@ pub fn handle(
         std::fs::remove_dir_all(&pkg_dir)?;
     }
 
-    // 6. Remove from DB
+    // 6. Remove from DB (including dependency records)
     db.remove_files_for_package(&pkg_key)?;
+    db.remove_dependencies(&pkg_key)?;
     db.remove_package(&node.id.name, &node.id.version)?;
 
     println!("Removed {}-{}.", node.id.name, node.id.version);
@@ -104,20 +102,46 @@ fn remove_bin_symlinks(
     Ok(())
 }
 
-/// Find and remove orphaned packages (dependencies not needed by any explicit package)
+/// Find and remove orphaned packages (dependencies not needed by any remaining package)
 fn remove_orphans(paths: &ZlPaths, db: &ZlDatabase) -> ZlResult<()> {
     let all_packages = db.list_packages()?;
 
-    // Find packages that are not explicit and not depended on by any explicit package
+    // Find packages that are not explicit and not depended on by any remaining package.
+    // Check both the dependency table and the shared lib needs.
     let orphans: Vec<_> = all_packages
         .iter()
         .filter(|pkg| !pkg.explicit)
         .filter(|pkg| {
-            // Check if any explicit package needs libs provided by this one
+            // Check if any remaining package has a registered dependency on this one
+            let pkg_name = &pkg.id.name;
+            let has_dependents = all_packages.iter().any(|other| {
+                if other.id.name == *pkg_name {
+                    return false;
+                }
+                let other_key = format!("{}-{}", other.id.name, other.id.version);
+                db.get_dependencies(&other_key)
+                    .unwrap_or_default()
+                    .iter()
+                    .any(|dep| {
+                        // Strip version constraints for comparison
+                        let dep_name = dep.split(&['>', '<', '=', ':'][..]).next().unwrap_or(dep);
+                        dep_name == pkg_name
+                    })
+            });
+
+            if has_dependents {
+                return false;
+            }
+
+            // Also check shared lib dependencies (legacy/fallback)
             let provides: std::collections::HashSet<&str> =
                 pkg.provides_libs.keys().map(|s| s.as_str()).collect();
             !all_packages.iter().any(|other| {
-                other.explicit && other.needs_libs.iter().any(|lib| provides.contains(lib.as_str()))
+                other.id.name != *pkg_name
+                    && other
+                        .needs_libs
+                        .iter()
+                        .any(|lib| provides.contains(lib.as_str()))
             })
         })
         .collect();
@@ -149,6 +173,7 @@ fn remove_orphans(paths: &ZlPaths, db: &ZlDatabase) -> ZlResult<()> {
 
         // Remove from DB
         db.remove_files_for_package(&pkg_key)?;
+        db.remove_dependencies(&pkg_key)?;
         db.remove_package(&orphan.id.name, &orphan.id.version)?;
     }
 
