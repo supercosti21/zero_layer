@@ -1,3 +1,6 @@
+pub mod apt;
+pub mod aur;
+pub mod github;
 pub mod pacman;
 
 use std::path::{Path, PathBuf};

@@ -99,6 +99,14 @@ src/
       mirror.rs        # Mirror list parsing and URL construction
       database.rs      # Sync DB download/parsing with retry (pacman desc format)
       package.rs       # .pkg.tar.zst download with retry, extraction, .PKGINFO parsing
+    aur/
+      mod.rs           # AurPlugin: live AUR RPC v5 queries, git clone + makepkg build
+    apt/
+      mod.rs           # AptPlugin: Packages.gz sync, per-distro mirror/suite config
+      index.rs         # APT Packages index parser (RFC 2822-like format)
+      deb.rs           # .deb extraction (ar → data.tar.{gz,xz,zst,bz2}) + download
+    github/
+      mod.rs           # GithubPlugin: GitHub Releases API, smart asset selection, extract
 ```
 
 ### Key abstractions
@@ -124,8 +132,12 @@ src/
 | `clap` (derive) | CLI argument parsing |
 | `clap_complete` | Shell completions generation (bash/zsh/fish) |
 | `indicatif` | Progress bars for downloads and installs |
-| `reqwest` (blocking) | HTTP downloads |
+| `reqwest` (blocking+json) | HTTP downloads + JSON deserialization |
 | `tar` + `zstd` + `flate2` | Archive extraction |
+| `xz2` | XZ decompression (.tar.xz, Packages.xz) |
+| `ar` | Ar archive reading (.deb format) |
+| `bzip2` | BZip2 decompression (data.tar.bz2 in old .deb) |
+| `zip` | Zip extraction (GitHub release assets) |
 | `sha2` | SHA256 checksums for package verification |
 
 ### ZL directory layout (runtime)
@@ -231,14 +243,24 @@ src/
 - [x] `cli/mod.rs` — Global flags: `--dry-run`/`--simulate`, `--skip-verify`
 - [x] `error.rs` — New error variants: GpgVerification, SelfUpdate, Environment
 
-### All tests pass: 72 tests
-The project compiles and all 72 tests pass.
+### Phase 5: New plugins — AUR, APT, GitHub Releases (complete)
+- [x] `plugin/aur/mod.rs` — AurPlugin: live AUR RPC API v5 (search/resolve), git clone + makepkg build. `zl install yay --from aur`
+- [x] `plugin/apt/index.rs` — APT Packages index parser: RFC 2822-like format, dep list parsing, short-description extraction
+- [x] `plugin/apt/deb.rs` — .deb extraction: ar → data.tar.{gz,xz,zst,bz2}, SHA256 cache validation, retry download
+- [x] `plugin/apt/mod.rs` — AptPlugin: Packages.gz sync per component, in-memory DB, configurable mirror/suite/arch. `zl install vim --from apt`
+- [x] `plugin/github/mod.rs` — GithubPlugin: GitHub Releases API, smart asset scoring (arch, musl, format), extract tar.gz/tar.xz/zip/AppImage/bare binary. `zl install sharkdp/bat --from github`
+- [x] `Cargo.toml` — Added: `ar`, `bzip2`, `zip`, `xz2`, reqwest `json` feature
+- [x] `plugin/mod.rs` — Added `pub mod aur; pub mod apt; pub mod github;`
+- [x] `main.rs` — All three plugins registered at startup (AurPlugin, AptPlugin, GithubPlugin)
+- [x] All tests pass: **79 tests** (was 72 → +7 new: 3 apt::index, 1 aur, 3 github)
+
+### All tests pass: 79 tests
 
 ### Removed
 - `core/path/fhs.rs` — replaced by `system/` module. No more hardcoded FHS constants.
 
-### Future work (Phase 5+)
-- [ ] Additional plugins: APT, RPM, AppImage, GitHub Releases, pip, npm, cargo
+### Future work (Phase 6+)
+- [ ] Additional plugins: RPM, AppImage, pip, npm, cargo
 - [ ] Cross-OS support (macOS/Homebrew via HostAdapter trait)
 - [ ] Interactive conflict resolution (dialoguer is already in deps)
 - [ ] Async HTTP for even faster parallel downloads
