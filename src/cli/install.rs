@@ -297,7 +297,9 @@ fn download_parallel(
             }
 
             for handle in handles {
-                handle.join().unwrap();
+                if handle.join().is_err() {
+                    tracing::warn!("A download thread panicked — result will be an error");
+                }
             }
         }
     });
@@ -305,7 +307,7 @@ fn download_parallel(
     overall.finish_and_clear();
 
     // Collect results, fail on first error
-    let results = results_mutex.into_inner().unwrap();
+    let results = results_mutex.into_inner().unwrap_or_else(|e| e.into_inner());
     results.into_iter().collect()
 }
 
@@ -417,8 +419,12 @@ pub fn install_from_archive(
 
     // Remap scripts
     for script_path in &extracted.script_files {
-        let _ = remapper::remap_shebang(script_path, &mapping);
-        let _ = remapper::remap_text_file(script_path, &mapping);
+        if let Err(e) = remapper::remap_shebang(script_path, &mapping) {
+            tracing::warn!("Failed to remap shebang in {}: {}", script_path.display(), e);
+        }
+        if let Err(e) = remapper::remap_text_file(script_path, &mapping) {
+            tracing::warn!("Failed to remap paths in {}: {}", script_path.display(), e);
+        }
     }
 
     // Install files to package directory
@@ -470,6 +476,11 @@ pub fn install_from_archive(
             candidate.name,
             other_versions.len()
         );
+    }
+
+    // Create XDG desktop entries and icon symlinks
+    if is_first_version {
+        install_xdg_assets(&pkg_dir, &paths.bin, txn);
     }
 
     // Create symlinks for shared libraries
@@ -701,6 +712,117 @@ pub fn create_bin_symlinks(pkg_dir: &Path, bin_dir: &Path, txn: &mut Transaction
     }
 
     Ok(())
+}
+
+/// Symlink .desktop files and icons from a package directory into XDG user dirs.
+///
+/// Desktop entries: `pkg_dir/usr/share/applications/*.desktop`
+///   → `$XDG_DATA_HOME/applications/`
+///
+/// Icons: `pkg_dir/usr/share/icons/**` and `pkg_dir/usr/share/pixmaps/**`
+///   → `$XDG_DATA_HOME/icons/` (preserving subdirectory structure)
+///
+/// The `Exec=` line in .desktop files is rewritten to strip absolute paths
+/// (e.g. `/usr/bin/firefox %u` → `firefox %u`) so the binary is found via PATH.
+fn install_xdg_assets(pkg_dir: &Path, bin_dir: &Path, txn: &mut Transaction) {
+    let xdg_data = dirs::data_local_dir().unwrap_or_else(|| {
+        dirs::home_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
+            .join(".local/share")
+    });
+
+    let xdg_apps = xdg_data.join("applications");
+    let xdg_icons = xdg_data.join("icons");
+
+    // .desktop files
+    for subdir in &["usr/share/applications", "share/applications"] {
+        let src_dir = pkg_dir.join(subdir);
+        if !src_dir.is_dir() {
+            continue;
+        }
+        if let Ok(()) = std::fs::create_dir_all(&xdg_apps) {
+            if let Ok(entries) = std::fs::read_dir(&src_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.extension().and_then(|e| e.to_str()) != Some("desktop") {
+                        continue;
+                    }
+                    let dest = xdg_apps.join(entry.file_name());
+                    // Rewrite Exec= to strip absolute path prefixes
+                    if let Ok(content) = std::fs::read_to_string(&path) {
+                        let patched = patch_desktop_exec(&content, bin_dir);
+                        if let Err(e) = std::fs::write(&dest, patched) {
+                            tracing::warn!("Failed to write .desktop {}: {}", dest.display(), e);
+                            continue;
+                        }
+                    } else {
+                        // Fallback: symlink as-is
+                        if let Err(e) = unix_fs::symlink(&path, &dest) {
+                            tracing::warn!("Failed to link .desktop {}: {}", dest.display(), e);
+                            continue;
+                        }
+                    }
+                    txn.track_symlink(&dest);
+                    tracing::debug!("Desktop entry: {}", dest.display());
+                }
+            }
+        }
+    }
+
+    // Icons (preserve full subdirectory tree)
+    for subdir in &["usr/share/icons", "share/icons", "usr/share/pixmaps", "share/pixmaps"] {
+        let src_dir = pkg_dir.join(subdir);
+        if !src_dir.is_dir() {
+            continue;
+        }
+        for entry in walkdir::WalkDir::new(&src_dir).into_iter().flatten() {
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let rel = match entry.path().strip_prefix(&src_dir) {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            let dest = xdg_icons.join(rel);
+            if let Some(parent) = dest.parent() {
+                if std::fs::create_dir_all(parent).is_err() {
+                    continue;
+                }
+            }
+            if dest.symlink_metadata().is_ok() {
+                continue; // don't overwrite existing icon
+            }
+            if let Err(e) = unix_fs::symlink(entry.path(), &dest) {
+                tracing::warn!("Failed to link icon {}: {}", dest.display(), e);
+                continue;
+            }
+            txn.track_symlink(&dest);
+        }
+    }
+}
+
+/// Rewrite `Exec=` lines in a .desktop file: strip absolute path prefix,
+/// keeping just the binary name (which will be found via PATH).
+/// `Exec=/usr/bin/firefox %u` → `Exec=firefox %u`
+fn patch_desktop_exec(content: &str, _bin_dir: &Path) -> String {
+    content
+        .lines()
+        .map(|line| {
+            if let Some(rest) = line.strip_prefix("Exec=") {
+                // Strip leading path component (e.g. /usr/bin/firefox → firefox)
+                let cmd_and_args: &str = rest.trim_start_matches('/');
+                let cmd_and_args = if let Some(slash) = cmd_and_args.find('/') {
+                    &cmd_and_args[slash + 1..]
+                } else {
+                    cmd_and_args
+                };
+                format!("Exec={}", cmd_and_args)
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// When `--from` is not specified, resolve from all plugins and pick a source.
