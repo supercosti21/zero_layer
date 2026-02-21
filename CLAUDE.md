@@ -243,6 +243,14 @@ src/
 - [x] `cli/mod.rs` — Global flags: `--dry-run`/`--simulate`, `--skip-verify`
 - [x] `error.rs` — New error variants: GpgVerification, SelfUpdate, Environment
 
+### Phase 5b: Interactive multi-source selection (complete)
+- [x] `cli/install.rs` — `pick_source()`: when `--from` is omitted, resolves from ALL plugins in parallel, then:
+  - 0 results → `PackageNotFound` error
+  - 1 result → auto-selects (no prompt)
+  - N results + `--yes` → picks first (highest-priority plugin, i.e. pacman)
+  - N results → shows `dialoguer::Select` for interactive choice
+- [x] `cli/install.rs` — `handle()` now determines `from: String` before syncing, so `plugin.sync()` and `deps::resolve_with_deps()` always use a known source name
+
 ### Phase 5: New plugins — AUR, APT, GitHub Releases (complete)
 - [x] `plugin/aur/mod.rs` — AurPlugin: live AUR RPC API v5 (search/resolve), git clone + makepkg build. `zl install yay --from aur`
 - [x] `plugin/apt/index.rs` — APT Packages index parser: RFC 2822-like format, dep list parsing, short-description extraction
