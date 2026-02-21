@@ -22,10 +22,10 @@ fn main() {
     let cli_args = cli::Cli::parse();
 
     tracing_subscriber::fmt()
-        .with_env_filter(if cli_args.global.verbose {
-            "debug"
-        } else {
-            "info"
+        .with_env_filter(match cli_args.global.verbose {
+            0 => "warn",
+            1 => "info",
+            _ => "debug",
         })
         .init();
 
