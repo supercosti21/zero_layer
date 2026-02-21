@@ -331,7 +331,8 @@ zl completions fish                # Generate fish completions
 ### Global Flags
 
 ```bash
-zl -v ...              # Verbose output
+zl -v ...              # Verbose output (show sync progress, package counts)
+zl -vv ...             # Debug output (full trace)
 zl -y ...              # Auto-confirm prompts
 zl --root /custom/path ...  # Use a custom ZL root directory
 zl --dry-run ...       # Show what would happen without making changes
@@ -343,7 +344,7 @@ zl --skip-verify ...   # Skip checksum and GPG signature verification
 
 ### Directory Layout
 
-ZL manages all packages under `~/.local/share/zl/`:
+ZL manages all packages under `~/.local/share/zl/`, and integrates with standard XDG user directories:
 
 ```
 ~/.local/share/zl/
@@ -354,6 +355,10 @@ ZL manages all packages under `~/.local/share/zl/`:
   packages/     # Per-package directories (name-version/)
   cache/        # Download cache
   envs/         # Ephemeral/named environment roots
+
+$XDG_DATA_HOME/ (default: ~/.local/share/)
+  applications/ # .desktop files symlinked here → apps appear in launcher
+  icons/        # Package icons symlinked here → icons appear in desktop
   zl.redb       # Package database
 ```
 
