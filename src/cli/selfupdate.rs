@@ -1,7 +1,7 @@
 use crate::error::{ZlError, ZlResult};
 
 /// GitHub repository for ZL releases
-const GITHUB_REPO: &str = "zero-layer/zl";
+const GITHUB_REPO: &str = "supercosti21/zero_layer";
 
 /// Handle `zl self-update`: download and replace the current binary with the latest release.
 pub fn handle() -> ZlResult<()> {
