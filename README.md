@@ -31,32 +31,25 @@ All translation happens at install time. Once installed, a package runs with zer
 
 ### Option 1 — Pre-built binary (recommended)
 
-Download the latest binary for your architecture from the [releases page](https://github.com/supercosti21/zero_layer/releases):
+Download the latest binary from the [releases page](https://github.com/supercosti21/zero_layer/releases):
 
 ```bash
-# x86_64
-curl -Lo zl https://github.com/supercosti21/zero_layer/releases/latest/download/zl-x86_64-unknown-linux-musl
+curl -Lo zl https://github.com/supercosti21/zero_layer/releases/latest/download/zl-x86_64-unknown-linux-gnu
 chmod +x zl
 sudo mv zl /usr/local/bin/
 ```
 
-```bash
-# aarch64 (Raspberry Pi 4/5, ARM servers, Apple Silicon via Asahi)
-curl -Lo zl https://github.com/supercosti21/zero_layer/releases/latest/download/zl-aarch64-unknown-linux-musl
-chmod +x zl
-sudo mv zl /usr/local/bin/
-```
-
-> **Note:** The musl builds are fully static — no glibc dependency, works on any Linux distro.
-
-Alternatively, install to your home directory (no sudo required):
+Or install to your home directory (no sudo required):
 
 ```bash
 mkdir -p ~/.local/bin
-curl -Lo ~/.local/bin/zl https://github.com/supercosti21/zero_layer/releases/latest/download/zl-x86_64-unknown-linux-musl
+curl -Lo ~/.local/bin/zl https://github.com/supercosti21/zero_layer/releases/latest/download/zl-x86_64-unknown-linux-gnu
 chmod +x ~/.local/bin/zl
 # Make sure ~/.local/bin is in your PATH (see below)
 ```
+
+> **Note:** v0.1.0 provides an x86_64 glibc binary (requires glibc 2.17+, works on any modern Linux distro).
+> Static musl builds and aarch64 support are planned for v0.2.0.
 
 ### Option 2 — Build from source
 
