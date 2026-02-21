@@ -206,13 +206,37 @@ Use `--skip-verify` to bypass all verification (not recommended).
 
 Package sources are implemented as **plugins** behind the `SourcePlugin` trait. Each plugin handles search, resolve, download, and extraction for its source format. Currently implemented:
 
-- **Pacman** — Arch Linux official repositories (core, extra)
+| Plugin | Source | Usage |
+|--------|--------|-------|
+| **pacman** | Arch Linux official repos (core, extra) | `zl install firefox --from pacman` |
+| **aur** | Arch User Repository (live queries) | `zl install yay --from aur` |
+| **apt** | Debian/Ubuntu APT repos | `zl install vim --from apt` |
+| **github** | GitHub Releases | `zl install sharkdp/bat --from github` |
+
+**AUR plugin** — uses AUR RPC API v5 for search and resolve, then builds with `git clone` + `makepkg`. Requires `base-devel` and `git` to be installed.
+
+**APT plugin** — downloads and parses `Packages.gz` index, then downloads `.deb` files. Configure in `~/.config/zl/config.toml`:
+
+```toml
+[plugins.apt]
+mirror     = "http://archive.ubuntu.com/ubuntu"   # or deb.debian.org/debian
+suite      = "noble"                               # noble, bookworm, focal, jammy, etc.
+components = ["main", "universe"]
+arch       = "amd64"                               # auto-detected if omitted
+```
+
+Run `zl update --from apt` to sync the package index before installing.
+
+**GitHub plugin** — fetches the latest release from any public GitHub repository. Smart asset selection: prefers musl+linux binaries and tar.gz format, skips Windows/macOS/deb/rpm assets. Supports tar.gz, tar.xz, tar.zst, zip, AppImage, and bare binary assets.
+
+```toml
+[plugins.github]
+token = "ghp_..."   # Optional: GitHub token to avoid rate limiting
+```
 
 Planned:
-- APT (Debian/Ubuntu)
 - RPM (Fedora/RHEL)
 - AppImage
-- GitHub Releases
 - pip, npm, cargo
 
 ### Universal Distro Support (SystemProfile)
@@ -369,7 +393,7 @@ repos = ["core", "extra"]
 
 ```bash
 cargo build              # Build
-cargo test               # Run all tests (72 tests)
+cargo test               # Run all tests (79 tests)
 cargo test <name>        # Run a single test
 cargo clippy             # Lint
 cargo fmt                # Format

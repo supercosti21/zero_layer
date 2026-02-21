@@ -11,6 +11,9 @@ use clap::Parser;
 use config::ZlConfig;
 use core::db::ops::ZlDatabase;
 use paths::ZlPaths;
+use plugin::apt::AptPlugin;
+use plugin::aur::AurPlugin;
+use plugin::github::GithubPlugin;
 use plugin::pacman::PacmanPlugin;
 use plugin::{PluginRegistry, SourcePlugin};
 use system::SystemProfile;
@@ -77,6 +80,20 @@ fn run(cli_args: cli::Cli) -> anyhow::Result<()> {
     pacman_config.cache_dir = zl_paths.cache.join("pacman");
     pacman.init(&pacman_config)?;
     registry.register(Box::new(pacman));
+
+    let mut aur = AurPlugin::new();
+    aur.init(&config.plugin_config("aur"))?;
+    registry.register(Box::new(aur));
+
+    let mut apt = AptPlugin::new();
+    let mut apt_config = config.plugin_config("apt");
+    apt_config.cache_dir = zl_paths.cache.join("apt");
+    apt.init(&apt_config)?;
+    registry.register(Box::new(apt));
+
+    let mut github = GithubPlugin::new();
+    github.init(&config.plugin_config("github"))?;
+    registry.register(Box::new(github));
 
     let auto_yes = cli_args.global.yes || config.general.auto_confirm;
     let dry_run = cli_args.global.dry_run;
