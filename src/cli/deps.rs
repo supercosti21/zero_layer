@@ -1,8 +1,10 @@
 use std::collections::HashSet;
+use std::path::Path;
 
 use crate::core::db::ops::ZlDatabase;
 use crate::error::{ZlError, ZlResult};
 use crate::plugin::{PackageCandidate, PluginRegistry, SourcePlugin};
+use crate::system::SystemProfile;
 
 /// A single entry in the install plan
 #[derive(Debug, Clone)]
@@ -55,6 +57,7 @@ pub fn resolve_with_deps(
     source_name: Option<&str>,
     db: &ZlDatabase,
     registry: &PluginRegistry,
+    profile: &SystemProfile,
 ) -> ZlResult<InstallPlan> {
     let plugin = registry
         .get_or_default(source_name)
@@ -81,6 +84,7 @@ pub fn resolve_with_deps(
         true,
         plugin,
         db,
+        profile,
         &mut resolved,
         &mut resolving_stack,
         &mut plan_entries,
@@ -100,6 +104,7 @@ fn resolve_recursive(
     explicit: bool,
     plugin: &dyn SourcePlugin,
     db: &ZlDatabase,
+    profile: &SystemProfile,
     resolved: &mut HashSet<String>,
     resolving_stack: &mut Vec<String>,
     plan: &mut Vec<InstallEntry>,
@@ -113,7 +118,7 @@ fn resolve_recursive(
         return Ok(());
     }
 
-    // Already installed in the database
+    // Already installed in the ZL database
     if db.get_package_by_name(name)?.is_some() {
         tracing::debug!("{} is already installed, skipping", name);
         already_installed.push(name.clone());
@@ -121,15 +126,23 @@ fn resolve_recursive(
         return Ok(());
     }
 
-    // Cycle detection
+    // Already provided by the host system (e.g. libc6 on Arch = libc.so.6 already present)
+    if is_system_provided(name, &profile.lib_dirs) {
+        tracing::debug!("{} is provided by the host system, skipping", name);
+        already_installed.push(format!("{} (system)", name));
+        resolved.insert(name.clone());
+        return Ok(());
+    }
+
+    // Cycle detection — circular deps (e.g. libc6 ↔ libgcc-s1 in Debian) are common
+    // in base system packages. Treat as co-dependency: the package is already being
+    // resolved and will be installed, so just skip to avoid infinite recursion.
     if resolving_stack.contains(name) {
-        let mut cycle_chain: Vec<String> = resolving_stack
-            .iter()
-            .skip_while(|n| n.as_str() != name)
-            .cloned()
-            .collect();
-        cycle_chain.push(name.clone());
-        return Err(ZlError::DependencyCycle { chain: cycle_chain });
+        tracing::debug!(
+            "Circular dependency: {} is already being resolved (co-dependency), skipping",
+            name
+        );
+        return Ok(());
     }
 
     resolving_stack.push(name.clone());
@@ -148,6 +161,13 @@ fn resolve_recursive(
             continue;
         }
 
+        // Skip if provided by the host system
+        if is_system_provided(dep_name, &profile.lib_dirs) {
+            tracing::debug!("Dep '{}' provided by host system, skipping", dep_name);
+            resolved.insert(dep_name.to_string());
+            continue;
+        }
+
         // Try to resolve the dependency via the plugin
         match plugin.resolve(dep_name, None)? {
             Some(dep_candidate) => {
@@ -156,6 +176,7 @@ fn resolve_recursive(
                     false, // dependencies are implicit
                     plugin,
                     db,
+                    profile,
                     resolved,
                     resolving_stack,
                     plan,
@@ -235,9 +256,131 @@ pub fn display_plan(plan: &InstallPlan) {
     );
 }
 
+fn lib_dir_contains_lib(lib_dir: &Path, base: &str) -> bool {
+    std::fs::read_dir(lib_dir)
+        .ok()
+        .map(|entries| {
+            entries.flatten().any(|e| {
+                let fname = e.file_name();
+                let s = fname.to_string_lossy();
+                s.starts_with(base) && s.contains(".so")
+            })
+        })
+        .unwrap_or(false)
+}
+
+/// Check if a dependency is already provided by the host system.
+///
+/// This prevents downloading Ubuntu/Debian system libs (libc6, libgcc-s1,
+/// zlib1g, etc.) when the equivalent library is already present on the host
+/// (e.g. libc.so.6, libgcc_s.so.1, libz.so.1 on Arch Linux).
+///
+/// Two checks:
+/// 1. Pure metadata packages (no binaries) — always skip on non-Debian systems
+/// 2. Library packages — check if a matching `.so` file exists in system lib dirs
+fn is_system_provided(dep_name: &str, lib_dirs: &[std::path::PathBuf]) -> bool {
+    // Pure metadata/config packages with no installable binaries
+    const METADATA_ONLY: &[&str] = &[
+        "debconf",
+        "tzdata",
+        "netbase",
+        "media-types",
+        "base-files",
+        "readline-common",
+        "sensible-utils",
+        "lsb-base",
+        "init-system-helpers",
+        "dpkg",
+        "apt",
+        "perl-base",
+        "perl",
+        "libperl5.38",
+        "ucf",
+        "adduser",
+        "login",
+        "passwd",
+    ];
+    if METADATA_ONLY.contains(&dep_name) {
+        return true;
+    }
+
+    // Library packages: derive the base lib name and check system lib dirs.
+    // Try both underscore form ("libgcc_s") and hyphen form ("libpcre2-8")
+    // since different libraries use different conventions in their soname.
+    if dep_name.starts_with("lib") {
+        let base_underscore = derive_lib_base(dep_name);
+        let base_hyphen = base_underscore.replace('_', "-");
+        for lib_dir in lib_dirs {
+            if lib_dir_contains_lib(lib_dir, &base_underscore)
+                || lib_dir_contains_lib(lib_dir, &base_hyphen)
+            {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+/// Derive the base library filename prefix from an APT/dpkg package name.
+///
+/// Examples:
+/// - `libc6`        → `libc`
+/// - `libgcc-s1`    → `libgcc_s`
+/// - `libssl3t64`   → `libssl`
+/// - `libacl1`      → `libacl`
+/// - `libbz2-1.0`   → `libbz2`
+/// - `libncursesw6` → `libncursesw`
+/// - `libpcre2-8-0` → `libpcre2_8`
+fn derive_lib_base(pkg_name: &str) -> String {
+    let mut s = pkg_name.to_string();
+    let mut stripped_hyphen_version = false;
+
+    // Strip common Debian multiarch/compat suffixes (t64, i386, amd64, arm64, armhf)
+    for suffix in &["t64", "i386", "amd64", "arm64", "armhf", "armel"] {
+        if let Some(stripped) = s.strip_suffix(suffix) {
+            s = stripped.to_string();
+            break;
+        }
+    }
+
+    // Strip trailing hyphen-version suffix if everything after the last `-` is digits/dots.
+    // e.g. "libbz2-1.0" → strip "-1.0" → "libbz2"
+    //      "libpcre2-8-0" → strip "-0" → "libpcre2-8"
+    if let Some(pos) = s.rfind('-') {
+        let after = &s[pos + 1..];
+        if !after.is_empty() && after.chars().all(|c| c.is_ascii_digit() || c == '.') {
+            s.truncate(pos);
+            stripped_hyphen_version = true;
+        }
+    }
+
+    // Trim trailing standalone digits only if we haven't already stripped a hyphen-version.
+    // e.g. "libc6" → "libc", "libgcc-s1" → "libgcc-s", but "libbz2" stays "libbz2"
+    let base = if !stripped_hyphen_version {
+        s.trim_end_matches(|c: char| c.is_ascii_digit()).to_string()
+    } else {
+        s
+    };
+
+    // Replace hyphens with underscores to match soname convention (libgcc-s → libgcc_s)
+    base.replace('-', "_")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_derive_lib_base() {
+        assert_eq!(derive_lib_base("libc6"), "libc");
+        assert_eq!(derive_lib_base("libgcc-s1"), "libgcc_s");
+        assert_eq!(derive_lib_base("libssl3t64"), "libssl");
+        assert_eq!(derive_lib_base("libacl1"), "libacl");
+        assert_eq!(derive_lib_base("libbz2-1.0"), "libbz2");
+        assert_eq!(derive_lib_base("libncursesw6"), "libncursesw");
+        assert_eq!(derive_lib_base("libpcre2-8-0"), "libpcre2_8");
+    }
 
     #[test]
     fn test_strip_version_constraint() {

@@ -138,6 +138,9 @@ pub struct SearchArgs {
     /// Limit to a specific source
     #[arg(long)]
     pub from: Option<String>,
+    /// Maximum results per source (default: 20)
+    #[arg(long)]
+    pub limit: Option<usize>,
 }
 
 #[derive(Args)]

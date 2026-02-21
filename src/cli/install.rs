@@ -65,6 +65,7 @@ pub fn handle(
         Some(&from),
         db,
         registry,
+        profile,
     )?;
 
     if plan.packages.is_empty() {
@@ -842,6 +843,11 @@ fn pick_source(
     let mut found: Vec<(String, String, String)> = Vec::new(); // (plugin_name, display_label, version)
 
     for plugin in registry.all() {
+        // Sync first so the local DB is up to date before querying
+        if let Err(e) = plugin.sync() {
+            tracing::debug!("Failed to sync {} during source discovery: {}", plugin.name(), e);
+        }
+
         match plugin.resolve(package, version) {
             Ok(Some(candidate)) => {
                 let label = format!(
