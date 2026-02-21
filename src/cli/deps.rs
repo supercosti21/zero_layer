@@ -121,15 +121,15 @@ fn resolve_recursive(
         return Ok(());
     }
 
-    // Cycle detection
+    // Cycle detection — circular deps (e.g. libc6 ↔ libgcc-s1 in Debian) are common
+    // in base system packages. Treat as co-dependency: the package is already being
+    // resolved and will be installed, so just skip to avoid infinite recursion.
     if resolving_stack.contains(name) {
-        let mut cycle_chain: Vec<String> = resolving_stack
-            .iter()
-            .skip_while(|n| n.as_str() != name)
-            .cloned()
-            .collect();
-        cycle_chain.push(name.clone());
-        return Err(ZlError::DependencyCycle { chain: cycle_chain });
+        tracing::debug!(
+            "Circular dependency: {} is already being resolved (co-dependency), skipping",
+            name
+        );
+        return Ok(());
     }
 
     resolving_stack.push(name.clone());
