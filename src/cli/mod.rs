@@ -13,7 +13,7 @@ pub mod selfupdate;
 pub mod update;
 pub mod upgrade;
 
-use clap::{Args, Parser, Subcommand};
+use clap::{ArgAction, Args, Parser, Subcommand};
 use clap_complete::Shell;
 
 #[derive(Parser)]
@@ -32,9 +32,9 @@ pub struct Cli {
 
 #[derive(Args)]
 pub struct GlobalOpts {
-    /// Enable verbose output
-    #[arg(short, long, global = true)]
-    pub verbose: bool,
+    /// Verbose output (-v = info, -vv = debug)
+    #[arg(short, long, global = true, action = ArgAction::Count)]
+    pub verbose: u8,
 
     /// ZL root directory (default: ~/.local/share/zl)
     #[arg(long, global = true)]

@@ -21,12 +21,18 @@ impl ZlDatabase {
             .begin_write()
             .map_err(|e| ZlError::Config(format!("Failed to init database: {}", e)))?;
         {
-            let _ = txn.open_table(PACKAGES);
-            let _ = txn.open_table(FILE_OWNERS);
-            let _ = txn.open_table(LIB_INDEX);
-            let _ = txn.open_table(DEPENDENCIES);
-            let _ = txn.open_table(PLUGIN_META);
-            let _ = txn.open_table(PINNED);
+            txn.open_table(PACKAGES)
+                .map_err(|e| ZlError::Config(format!("Failed to init PACKAGES table: {}", e)))?;
+            txn.open_table(FILE_OWNERS)
+                .map_err(|e| ZlError::Config(format!("Failed to init FILE_OWNERS table: {}", e)))?;
+            txn.open_table(LIB_INDEX)
+                .map_err(|e| ZlError::Config(format!("Failed to init LIB_INDEX table: {}", e)))?;
+            txn.open_table(DEPENDENCIES)
+                .map_err(|e| ZlError::Config(format!("Failed to init DEPENDENCIES table: {}", e)))?;
+            txn.open_table(PLUGIN_META)
+                .map_err(|e| ZlError::Config(format!("Failed to init PLUGIN_META table: {}", e)))?;
+            txn.open_table(PINNED)
+                .map_err(|e| ZlError::Config(format!("Failed to init PINNED table: {}", e)))?;
         }
         txn.commit()
             .map_err(|e| ZlError::Config(format!("Failed to commit init: {}", e)))?;

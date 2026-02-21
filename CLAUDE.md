@@ -243,6 +243,18 @@ src/
 - [x] `cli/mod.rs` — Global flags: `--dry-run`/`--simulate`, `--skip-verify`
 - [x] `error.rs` — New error variants: GpgVerification, SelfUpdate, Environment
 
+### Phase 5c: Error handling + XDG integration (complete)
+- [x] `core/db/ops.rs` — DB init: propagate `open_table` errors instead of silently swallowing
+- [x] `cli/install.rs` — Script remap failures now logged with `tracing::warn!` instead of `let _ =`
+- [x] `cli/install.rs` — Thread join panic handled without `unwrap()`; poisoned Mutex recovered with `into_inner()`
+- [x] `cli/install.rs` — `install_xdg_assets()`: symlinks `.desktop` files to `$XDG_DATA_HOME/applications/`, icons to `$XDG_DATA_HOME/icons/` (full tree). Uses `dirs::data_local_dir()` — works on all distros
+- [x] `cli/install.rs` — `patch_desktop_exec()`: rewrites `Exec=` in .desktop files to strip absolute path prefix so binary is found via PATH
+- [x] `cli/selfupdate.rs` — Distinct error message for 404 (no releases) vs network errors
+- [x] `error.rs` — Better hint for `SelfUpdate` permission denied: suggests `sudo zl self-update`
+- [x] `cli/mod.rs` — `verbose` changed from `bool` to `u8` (`ArgAction::Count`): `-v` = info, `-vv` = debug
+- [x] `main.rs` — Default log level changed from `info` to `warn` (clean output by default)
+- [x] `cli/selfupdate.rs` — Fixed GitHub repo URL: `supercosti21/zero_layer` (was `zero-layer/zl`)
+
 ### Phase 5b: Interactive multi-source selection (complete)
 - [x] `cli/install.rs` — `pick_source()`: when `--from` is omitted, resolves from ALL plugins in parallel, then:
   - 0 results → `PackageNotFound` error

@@ -1,7 +1,7 @@
 use crate::error::{ZlError, ZlResult};
 
 /// GitHub repository for ZL releases
-const GITHUB_REPO: &str = "zero-layer/zl";
+const GITHUB_REPO: &str = "supercosti21/zero_layer";
 
 /// Handle `zl self-update`: download and replace the current binary with the latest release.
 pub fn handle() -> ZlResult<()> {
@@ -69,10 +69,15 @@ pub fn handle() -> ZlResult<()> {
         .map_err(|e| ZlError::SelfUpdate(format!("Failed to check for updates: {}", e)))?;
 
     if !response.status().is_success() {
-        return Err(ZlError::SelfUpdate(format!(
-            "GitHub API returned status {}: check your internet connection or try again later",
-            response.status()
-        )));
+        let msg = if response.status().as_u16() == 404 {
+            "No releases found on GitHub — check that the repository has published releases".to_string()
+        } else {
+            format!(
+                "GitHub API returned status {}: check your internet connection or try again later",
+                response.status()
+            )
+        };
+        return Err(ZlError::SelfUpdate(msg));
     }
 
     let body_text = response
