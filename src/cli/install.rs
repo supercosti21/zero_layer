@@ -65,6 +65,7 @@ pub fn handle(
         Some(&from),
         db,
         registry,
+        profile,
     )?;
 
     if plan.packages.is_empty() {
