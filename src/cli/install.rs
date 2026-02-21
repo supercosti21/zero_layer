@@ -13,13 +13,14 @@ use crate::core::graph::model::{PackageId, PackageNode};
 use crate::core::path::PathMapping;
 use crate::core::path::remapper;
 use crate::core::transaction::Transaction;
+use crate::core::verify;
 use crate::error::{ZlError, ZlResult};
 use crate::paths::ZlPaths;
 use crate::plugin::{PackageCandidate, PluginRegistry, SourcePlugin};
 use crate::system::SystemProfile;
 
-use super::InstallArgs;
 use super::deps;
+use super::{InstallArgs, SwitchArgs};
 
 /// Maximum number of concurrent downloads
 const MAX_PARALLEL_DOWNLOADS: usize = 4;
@@ -31,7 +32,13 @@ pub fn handle(
     registry: &PluginRegistry,
     profile: &SystemProfile,
     auto_yes: bool,
+    dry_run: bool,
+    skip_verify: bool,
 ) -> ZlResult<()> {
+    if dry_run {
+        println!("[DRY-RUN] Simulating install of {}...", args.package);
+    }
+
     // 1. Pick plugin and sync
     let plugin = registry
         .get_or_default(args.from.as_deref())
@@ -80,6 +87,14 @@ pub fn handle(
     // 4. Display install plan
     deps::display_plan(&plan);
 
+    if dry_run {
+        println!(
+            "\n[DRY-RUN] Would install {} package(s). No changes made.",
+            plan.packages.len()
+        );
+        return Ok(());
+    }
+
     // 5. Confirm
     if !auto_yes {
         print!("\nProceed with installation? [Y/n] ");
@@ -101,7 +116,21 @@ pub fn handle(
     println!("\nDownloading {} package(s)...", total);
     let archives = download_parallel(&candidates, plugin, &paths.cache)?;
 
-    // 7. Install each package with transaction support
+    // 7. Verify all downloads
+    println!("Verifying packages...");
+    for (candidate, archive_path) in candidates.iter().zip(archives.iter()) {
+        let result = verify::verify_package(
+            archive_path,
+            candidate.checksum.as_deref(),
+            &candidate.download_url,
+            skip_verify,
+        )?;
+        if !skip_verify {
+            tracing::info!("  {} — {}", candidate.name, result.message);
+        }
+    }
+
+    // 8. Install each package with transaction support
     let mut txn = Transaction::new();
     let mut installed_count = 0;
 
@@ -132,10 +161,7 @@ pub fn handle(
             }
             Err(e) => {
                 install_pb.finish_and_clear();
-                eprintln!(
-                    "\nFailed to install {}: {}",
-                    entry.candidate.name, e
-                );
+                eprintln!("\nFailed to install {}: {}", entry.candidate.name, e);
                 eprintln!("Rolling back {} installed package(s)...", installed_count);
                 txn.rollback(db);
                 return Err(e);
@@ -149,7 +175,7 @@ pub fn handle(
     // Commit the transaction — all installs succeeded
     txn.commit();
 
-    // 8. Summary
+    // 9. Summary
     let dep_count = plan.dep_count();
     if dep_count > 0 {
         println!(
@@ -285,8 +311,9 @@ pub fn install_single_package(
     db: &ZlDatabase,
     plugin: &dyn SourcePlugin,
     profile: &SystemProfile,
+    skip_verify: bool,
 ) -> ZlResult<()> {
-    // Check if already installed
+    // Check if this exact version is already installed
     if db
         .get_package(&candidate.name, &candidate.version)?
         .is_some()
@@ -302,6 +329,15 @@ pub fn install_single_package(
     // Download
     println!("  Downloading {}...", candidate.name);
     let archive_path = plugin.download(candidate, &paths.cache)?;
+
+    // Verify
+    let result = verify::verify_package(
+        &archive_path,
+        candidate.checksum.as_deref(),
+        &candidate.download_url,
+        skip_verify,
+    )?;
+    tracing::info!("  {} — {}", candidate.name, result.message);
 
     let mut txn = Transaction::new();
     match install_from_archive(
@@ -338,7 +374,7 @@ pub fn install_from_archive(
     profile: &SystemProfile,
     txn: &mut Transaction,
 ) -> ZlResult<()> {
-    // Check if already installed
+    // Check if this exact version is already installed
     if db
         .get_package(&candidate.name, &candidate.version)?
         .is_some()
@@ -414,13 +450,33 @@ pub fn install_from_archive(
         }
     }
 
-    // Create symlinks for binaries
-    create_bin_symlinks(&pkg_dir, &paths.bin, txn)?;
+    // Create symlinks for binaries (only if no other version has active symlinks,
+    // or if this is the first version installed)
+    let other_versions = db.get_all_versions(&candidate.name)?;
+    let is_first_version = other_versions.is_empty();
+
+    if is_first_version {
+        create_bin_symlinks(&pkg_dir, &paths.bin, txn)?;
+    } else {
+        tracing::info!(
+            "{} has {} other version(s) installed — not overwriting bin symlinks. Use `zl switch` to change active version.",
+            candidate.name,
+            other_versions.len()
+        );
+    }
 
     // Create symlinks for shared libraries
     for (soname, lib_path) in &provides_libs {
         let link_path = paths.lib.join(soname);
         if link_path.exists() || link_path.symlink_metadata().is_ok() {
+            // Only overwrite if this is the first version or explicitly wanted
+            if !is_first_version {
+                tracing::debug!(
+                    "Lib symlink {} already exists, not overwriting for side-by-side",
+                    soname
+                );
+                continue;
+            }
             std::fs::remove_file(&link_path)?;
         }
         unix_fs::symlink(lib_path, &link_path)?;
@@ -498,8 +554,106 @@ pub fn install_from_archive(
     Ok(())
 }
 
+/// Switch the active version of a multi-version package.
+/// Updates bin/ and lib/ symlinks to point to the specified version.
+pub fn handle_switch(args: SwitchArgs, paths: &ZlPaths, db: &ZlDatabase) -> ZlResult<()> {
+    let versions = db.get_all_versions(&args.package)?;
+
+    if versions.is_empty() {
+        return Err(ZlError::PackageNotFound {
+            name: args.package.clone(),
+        });
+    }
+
+    let target = versions
+        .iter()
+        .find(|v| v.id.version == args.version)
+        .ok_or_else(|| {
+            ZlError::Config(format!(
+                "Version {} of {} is not installed. Installed versions: {}",
+                args.version,
+                args.package,
+                versions
+                    .iter()
+                    .map(|v| v.id.version.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ))
+        })?;
+
+    let pkg_dir = paths
+        .packages
+        .join(format!("{}-{}", args.package, args.version));
+
+    // Remove existing bin symlinks that point to any version of this package
+    for version in &versions {
+        let old_pkg_dir = paths
+            .packages
+            .join(format!("{}-{}", version.id.name, version.id.version));
+        remove_pkg_bin_symlinks(&old_pkg_dir, &paths.bin)?;
+        remove_pkg_lib_symlinks(version, &paths.lib)?;
+    }
+
+    // Create new symlinks for the target version
+    let mut txn = Transaction::new();
+    create_bin_symlinks(&pkg_dir, &paths.bin, &mut txn)?;
+
+    // Re-create lib symlinks for the target version
+    for (soname, lib_path) in &target.provides_libs {
+        let link_path = paths.lib.join(soname);
+        if link_path.exists() || link_path.symlink_metadata().is_ok() {
+            std::fs::remove_file(&link_path)?;
+        }
+        unix_fs::symlink(lib_path, &link_path)?;
+    }
+
+    txn.commit();
+
+    println!(
+        "Switched {} to version {} (from {})",
+        args.package,
+        args.version,
+        versions
+            .iter()
+            .map(|v| v.id.version.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+
+    Ok(())
+}
+
+/// Remove bin symlinks that point into a specific package directory
+fn remove_pkg_bin_symlinks(pkg_dir: &Path, bin_dir: &Path) -> ZlResult<()> {
+    if !bin_dir.is_dir() {
+        return Ok(());
+    }
+    let entries = std::fs::read_dir(bin_dir)?;
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+        if let Ok(target) = std::fs::read_link(&path) {
+            if target.starts_with(pkg_dir) {
+                std::fs::remove_file(&path)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Remove lib symlinks for a specific package version
+fn remove_pkg_lib_symlinks(node: &PackageNode, lib_dir: &Path) -> ZlResult<()> {
+    for (soname, _) in &node.provides_libs {
+        let link_path = lib_dir.join(soname);
+        if link_path.symlink_metadata().is_ok() {
+            std::fs::remove_file(&link_path)?;
+        }
+    }
+    Ok(())
+}
+
 /// Find executables inside a package directory and symlink them into bin/.
-fn create_bin_symlinks(pkg_dir: &Path, bin_dir: &Path, txn: &mut Transaction) -> ZlResult<()> {
+pub fn create_bin_symlinks(pkg_dir: &Path, bin_dir: &Path, txn: &mut Transaction) -> ZlResult<()> {
     let bin_subdirs = [
         "usr/bin",
         "usr/sbin",

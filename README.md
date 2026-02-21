@@ -17,12 +17,13 @@ zl install firefox --from pacman
 1. **Resolve** dependencies recursively — find all transitive deps from the source
 2. **Check for conflicts** — file ownership, binary names, library sonames, version constraints
 3. **Download** all packages in parallel (up to 4 concurrent) with progress bars and retry
-4. **Analyze** all ELF binaries — detect interpreters, shared library dependencies, RPATH/RUNPATH
-5. **Patch** binaries — set the correct dynamic linker and RUNPATH for the target system
-6. **Remap** hardcoded FHS paths (`/usr/lib`, `/usr/bin`, `/etc`) to ZL-managed directories
-7. **Install** with atomic transactions — automatic rollback if anything fails
-8. **Track** every file in a persistent database with dependency relationships
-9. **Verify** that all ELF binaries can resolve their dependencies post-install
+4. **Verify** — SHA256 checksum + GPG signature verification
+5. **Analyze** all ELF binaries — detect interpreters, shared library dependencies, RPATH/RUNPATH
+6. **Patch** binaries — set the correct dynamic linker and RUNPATH for the target system
+7. **Remap** hardcoded FHS paths (`/usr/lib`, `/usr/bin`, `/etc`) to ZL-managed directories
+8. **Install** with atomic transactions — automatic rollback if anything fails
+9. **Track** every file in a persistent database with dependency relationships
+10. **Verify** that all ELF binaries can resolve their dependencies post-install
 
 All translation happens at install time. Once installed, a package runs with zero overhead.
 
@@ -37,6 +38,12 @@ git clone https://github.com/supercosti21/zero_layer.git
 cd zero_layer
 cargo build --release
 # Binary is at target/release/zl
+```
+
+### Self-update
+
+```bash
+zl self-update    # Download and install the latest release
 ```
 
 Add ZL's bin directory to your PATH:
@@ -68,6 +75,7 @@ zl install <package> --from pacman # Install from a specific source
 zl install <package> --version 1.0 # Install a specific version
 zl remove <package>                # Remove a package
 zl remove <package> --cascade      # Remove package and orphaned deps
+zl remove <package> --version 1.0  # Remove a specific version only
 ```
 
 ### Search & Info
@@ -78,12 +86,44 @@ zl search <query> --from pacman    # Search a specific source
 zl info <package>                  # Detailed info about an installed package
 ```
 
-### Update
+### Update & Upgrade
 
 ```bash
 zl update                          # Update all packages (respects pinned)
 zl update <package>                # Update a specific package
+zl upgrade                         # Mass upgrade: show all available upgrades, confirm, upgrade all
+zl upgrade --check                 # Only show what would be upgraded (no changes)
+zl upgrade --from pacman           # Upgrade only packages from a specific source
 ```
+
+### Multi-Version Management
+
+Install multiple versions of the same package side-by-side:
+
+```bash
+zl install python --version 3.11   # Install Python 3.11
+zl install python --version 3.12   # Install Python 3.12 alongside 3.11
+zl switch python 3.12              # Activate version 3.12 (update bin/ symlinks)
+zl switch python 3.11              # Switch back to 3.11
+zl remove python --version 3.11    # Remove only version 3.11
+```
+
+### Ephemeral Environments
+
+Create isolated environments where packages disappear when you exit:
+
+```bash
+zl env shell                       # Enter a TEMPORARY environment (auto-deleted on exit)
+zl env shell myproject             # Enter/create a NAMED environment (persists)
+zl env list                        # List existing named environments
+zl env delete myproject            # Delete a named environment
+```
+
+Inside an environment shell:
+- A separate ZL root is used (`~/.local/share/zl/envs/<name>/`)
+- The env's `bin/` and `lib/` are prepended to `PATH` and `LD_LIBRARY_PATH`
+- Install packages with `zl --root $ZL_ENV_ROOT install <pkg>`
+- Temporary environments are completely deleted when you type `exit`
 
 ### List
 
@@ -127,9 +167,12 @@ zl completions fish                # Generate fish completions
 ### Global Flags
 
 ```bash
-zl -v ...    # Verbose output
-zl -y ...    # Auto-confirm prompts
+zl -v ...              # Verbose output
+zl -y ...              # Auto-confirm prompts
 zl --root /custom/path ...  # Use a custom ZL root directory
+zl --dry-run ...       # Show what would happen without making changes
+zl --simulate ...      # Same as --dry-run
+zl --skip-verify ...   # Skip checksum and GPG signature verification
 ```
 
 ## Architecture
@@ -146,8 +189,18 @@ ZL manages all packages under `~/.local/share/zl/`:
   etc/          # Config files
   packages/     # Per-package directories (name-version/)
   cache/        # Download cache
+  envs/         # Ephemeral/named environment roots
   zl.redb       # Package database
 ```
+
+### Package Verification
+
+ZL verifies package integrity before installation:
+
+1. **SHA256 checksum** — mandatory when available. Mismatches cause immediate failure.
+2. **GPG signature** — downloaded alongside the package when available (`.sig` files). Verified using the system `gpg` binary. Best-effort: skipped if gpg is not installed or no signature exists.
+
+Use `--skip-verify` to bypass all verification (not recommended).
 
 ### Plugin System
 
@@ -183,6 +236,7 @@ $ zl install firefox
 Syncing package database from Arch Linux (pacman)...
 Resolving dependencies...
 Checking for conflicts...
+Verifying packages...
 
 Dependencies to install (12):
   dbus-glib 0.112-3 (0.4 MB)
@@ -246,6 +300,23 @@ $ zl unpin firefox
 Unpinned firefox (updates allowed).
 ```
 
+### Dry-Run Mode
+
+Preview what any operation would do without making changes:
+
+```bash
+$ zl --dry-run install firefox
+[DRY-RUN] Simulating install of firefox...
+Syncing package database from Arch Linux (pacman)...
+Resolving dependencies...
+Checking for conflicts...
+
+Packages to install (1):
+  firefox 120.0-1 (238.0 MB)
+
+[DRY-RUN] Would install 1 package(s). No changes made.
+```
+
 ### Source Build Support
 
 ZL can build packages from source when precompiled binaries aren't available. It auto-detects the build system:
@@ -261,8 +332,11 @@ ZL can build packages from source when precompiled binaries aren't available. It
 - **Pure Rust, single binary** — no C dependencies, no dynamic linking required
 - **Dynamic system detection** — all paths and interpreters auto-detected, never hardcoded
 - **Parallel downloads** — up to 4 concurrent downloads with progress bars and exponential backoff retry
+- **Package verification** — SHA256 checksums + GPG signatures verified before install
 - **Atomic transactions** — all installs can be rolled back on failure
 - **5-way conflict detection** — prevents broken installs before they happen
+- **Multi-version packages** — install multiple versions side-by-side, switch between them
+- **Ephemeral environments** — isolated shells where packages disappear on exit
 - **ELF patching with `elb`** — pure-Rust patchelf alternative, sets interpreter and RUNPATH
 - **RUNPATH over RPATH** — modern standard, respects `LD_LIBRARY_PATH`
 - **`redb` database** — pure-Rust embedded key-value store (ACID, no SQLite/C dependency)
@@ -295,7 +369,7 @@ repos = ["core", "extra"]
 
 ```bash
 cargo build              # Build
-cargo test               # Run all tests (64 tests)
+cargo test               # Run all tests (72 tests)
 cargo test <name>        # Run a single test
 cargo clippy             # Lint
 cargo fmt                # Format

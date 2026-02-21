@@ -4,13 +4,57 @@ use crate::paths::ZlPaths;
 
 use super::RemoveArgs;
 
-pub fn handle(args: RemoveArgs, paths: &ZlPaths, db: &ZlDatabase, auto_yes: bool) -> ZlResult<()> {
+pub fn handle(
+    args: RemoveArgs,
+    paths: &ZlPaths,
+    db: &ZlDatabase,
+    auto_yes: bool,
+    dry_run: bool,
+) -> ZlResult<()> {
+    // If a specific version was requested, remove only that version
+    if let Some(ref version) = args.version {
+        return remove_specific_version(
+            &args.package,
+            version,
+            paths,
+            db,
+            auto_yes,
+            dry_run,
+            args.cascade,
+        );
+    }
+
     // 1. Find package in DB
     let node = db
         .get_package_by_name(&args.package)?
         .ok_or_else(|| ZlError::PackageNotFound {
             name: args.package.clone(),
         })?;
+
+    // Check if multiple versions exist
+    let all_versions = db.get_all_versions(&args.package)?;
+    if all_versions.len() > 1 {
+        println!("Multiple versions of {} are installed:", args.package);
+        for v in &all_versions {
+            println!("  - {}", v.id.version);
+        }
+        println!("\nRemoving all versions...");
+        if dry_run {
+            println!(
+                "[DRY-RUN] Would remove {} version(s) of {}. No changes made.",
+                all_versions.len(),
+                args.package
+            );
+            return Ok(());
+        }
+        for v in &all_versions {
+            remove_single(v, paths, db)?;
+        }
+        if args.cascade {
+            remove_orphans(paths, db)?;
+        }
+        return Ok(());
+    }
 
     let pkg_key = format!("{}-{}", node.id.name, node.id.version);
 
@@ -21,6 +65,14 @@ pub fn handle(args: RemoveArgs, paths: &ZlPaths, db: &ZlDatabase, auto_yes: bool
         node.id.version,
         node.installed_files.len()
     );
+
+    if dry_run {
+        println!(
+            "[DRY-RUN] Would remove {}-{}. No changes made.",
+            node.id.name, node.id.version
+        );
+        return Ok(());
+    }
 
     if !auto_yes {
         print!("Remove this package? [Y/n] ");
@@ -67,6 +119,105 @@ pub fn handle(args: RemoveArgs, paths: &ZlPaths, db: &ZlDatabase, auto_yes: bool
         remove_orphans(paths, db)?;
     }
 
+    Ok(())
+}
+
+/// Remove a specific version of a package
+fn remove_specific_version(
+    name: &str,
+    version: &str,
+    paths: &ZlPaths,
+    db: &ZlDatabase,
+    auto_yes: bool,
+    dry_run: bool,
+    cascade: bool,
+) -> ZlResult<()> {
+    let node = db
+        .get_package(name, version)?
+        .ok_or_else(|| ZlError::Config(format!("{}-{} is not installed", name, version)))?;
+
+    println!(
+        "Package: {}-{} ({} files)",
+        node.id.name,
+        node.id.version,
+        node.installed_files.len()
+    );
+
+    if dry_run {
+        println!(
+            "[DRY-RUN] Would remove {}-{}. No changes made.",
+            name, version
+        );
+        return Ok(());
+    }
+
+    if !auto_yes {
+        print!("Remove this version? [Y/n] ");
+        use std::io::Write;
+        std::io::stdout().flush()?;
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input)?;
+        let input = input.trim().to_lowercase();
+        if !input.is_empty() && input != "y" && input != "yes" {
+            println!("Removal cancelled.");
+            return Ok(());
+        }
+    }
+
+    remove_single(&node, paths, db)?;
+
+    // If there are other versions, switch symlinks to the next available version
+    let remaining = db.get_all_versions(name)?;
+    if !remaining.is_empty() {
+        let next = &remaining[0];
+        let next_pkg_dir = paths
+            .packages
+            .join(format!("{}-{}", next.id.name, next.id.version));
+        let mut txn = crate::core::transaction::Transaction::new();
+        super::install::create_bin_symlinks(&next_pkg_dir, &paths.bin, &mut txn)?;
+        txn.commit();
+        println!(
+            "Active version switched to {}-{}.",
+            next.id.name, next.id.version
+        );
+    }
+
+    if cascade {
+        remove_orphans(paths, db)?;
+    }
+
+    Ok(())
+}
+
+/// Remove a single package version (no prompts)
+fn remove_single(
+    node: &crate::core::graph::model::PackageNode,
+    paths: &ZlPaths,
+    db: &ZlDatabase,
+) -> ZlResult<()> {
+    let pkg_key = format!("{}-{}", node.id.name, node.id.version);
+
+    remove_bin_symlinks(&node.installed_files, &paths.bin)?;
+
+    for (soname, _) in &node.provides_libs {
+        let link_path = paths.lib.join(soname);
+        if link_path.symlink_metadata().is_ok() {
+            std::fs::remove_file(&link_path)?;
+        }
+    }
+
+    let pkg_dir = paths
+        .packages
+        .join(format!("{}-{}", node.id.name, node.id.version));
+    if pkg_dir.exists() {
+        std::fs::remove_dir_all(&pkg_dir)?;
+    }
+
+    db.remove_files_for_package(&pkg_key)?;
+    db.remove_dependencies(&pkg_key)?;
+    db.remove_package(&node.id.name, &node.id.version)?;
+
+    println!("Removed {}-{}.", node.id.name, node.id.version);
     Ok(())
 }
 

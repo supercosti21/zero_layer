@@ -220,8 +220,14 @@ mod tests {
 
     #[test]
     fn test_split_package_key() {
-        assert_eq!(split_package_key("firefox-120.0"), Some(("firefox", "120.0")));
-        assert_eq!(split_package_key("dbus-glib-0.3"), Some(("dbus-glib", "0.3")));
+        assert_eq!(
+            split_package_key("firefox-120.0"),
+            Some(("firefox", "120.0"))
+        );
+        assert_eq!(
+            split_package_key("dbus-glib-0.3"),
+            Some(("dbus-glib", "0.3"))
+        );
         assert_eq!(split_package_key("noversion"), None);
         assert_eq!(split_package_key("-bad"), None);
         assert_eq!(split_package_key("bad-"), None);

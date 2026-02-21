@@ -27,10 +27,7 @@ pub fn handle(args: InfoArgs, db: &ZlDatabase) -> ZlResult<()> {
         },
         if is_pinned { " [PINNED]" } else { "" }
     );
-    println!(
-        "Installed:    {}",
-        format_timestamp(pkg.installed_at)
-    );
+    println!("Installed:    {}", format_timestamp(pkg.installed_at));
     println!("Files:        {}", pkg.installed_files.len());
 
     // Shared libraries provided
@@ -63,10 +60,7 @@ pub fn handle(args: InfoArgs, db: &ZlDatabase) -> ZlResult<()> {
         .filter_map(|f| std::fs::metadata(f).ok())
         .map(|m| m.len())
         .sum();
-    println!(
-        "Disk usage:   {:.1} MB",
-        total_size as f64 / 1_000_000.0
-    );
+    println!("Disk usage:   {:.1} MB", total_size as f64 / 1_000_000.0);
 
     Ok(())
 }

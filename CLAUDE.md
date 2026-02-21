@@ -33,12 +33,13 @@ cargo fmt -- --check     # Check formatting without modifying files
 2. **Resolve** — recursive dependency resolution with cycle detection
 3. **Check conflicts** — file ownership, binary/library name, version constraints, declared conflicts
 4. **Download** packages in parallel (up to 4 threads) with progress bars and retry
-5. **Extract** and analyze all ELF binaries with `goblin`
-6. **Patch** binaries with `elb` (interpreter, RUNPATH) using detected page size
-7. **Remap** FHS paths to target system structure using dynamic prefix map
-8. **Install** with atomic transaction — rollback on any failure
-9. **Track** every file in a dependency graph and persistent database
-10. **Verify** everything resolves correctly post-install (using detected lib dirs)
+5. **Verify** — SHA256 checksum + GPG signature verification (best-effort)
+6. **Extract** and analyze all ELF binaries with `goblin`
+7. **Patch** binaries with `elb` (interpreter, RUNPATH) using detected page size
+8. **Remap** FHS paths to target system structure using dynamic prefix map
+9. **Install** with atomic transaction — rollback on any failure
+10. **Track** every file in a dependency graph and persistent database
+11. **Verify** everything resolves correctly post-install (using detected lib dirs)
 
 ### Module structure
 ```
@@ -58,16 +59,19 @@ src/
   cli/
     mod.rs             # Cli struct (clap derive), Commands enum, all arg structs
     deps.rs            # Dependency resolution: recursive resolve, install plan, cycle detection
-    install.rs         # Install: conflict check, parallel download, transaction-wrapped install
-    remove.rs          # Remove: delete files, symlinks, deps, DB entries, cascade orphans
+    install.rs         # Install: conflict check, parallel download, verification, transaction-wrapped install, multi-version support
+    remove.rs          # Remove: delete files, symlinks, deps, DB entries, cascade orphans, version-specific removal
     search.rs          # Search subcommand handler
     update.rs          # Update: check newer versions, skip pinned, remove old + install new
+    upgrade.rs         # Upgrade: mass upgrade all packages with summary + confirmation
     list.rs            # List: --explicit, --deps, --orphans filters
     info.rs            # Detailed package info: deps, reverse deps, disk usage, pin status
     cache.rs           # Cache management: list files + sizes, clean all cached files
     completions.rs     # Shell completions generation (bash/zsh/fish) via clap_complete
     pin.rs             # Pin/unpin packages to prevent updates
     lockfile.rs        # Export/import installed packages as JSON lockfile
+    selfupdate.rs      # Self-update: download + replace ZL binary from GitHub releases
+    env.rs             # Ephemeral environments: temporary/named isolated shells
   core/
     build/
       mod.rs           # BuildSpec, BuildSystem enum, detect_build_system(), build_package()
@@ -80,13 +84,14 @@ src/
       remapper.rs      # Rewrite paths in text files and shebangs
     transaction.rs     # Atomic install transaction: tracks files/dirs/symlinks/DB, rollback on failure
     conflicts.rs       # Conflict detection: file ownership, binary/lib name, version constraints, declared conflicts
+    verify.rs          # Package verification: SHA256 checksum + GPG signature (best-effort)
     graph/
       model.rs         # PackageId, PackageNode, DependencyEdge, DepGraph (petgraph)
       resolver.rs      # Topological sort, cycle detection, orphan detection
       verifier.rs      # Post-install verification — uses profile.lib_dirs for lib search
     db/
       schema.rs        # redb table definitions (PACKAGES, FILE_OWNERS, LIB_INDEX, DEPENDENCIES, PINNED)
-      ops.rs           # CRUD: packages, file ownership, lib index, dependencies, pinning, plugin metadata
+      ops.rs           # CRUD: packages, file ownership, lib index, dependencies, pinning, multi-version queries, plugin metadata
   plugin/
     mod.rs             # SourcePlugin trait, PackageCandidate, ExtractedPackage, PluginRegistry
     pacman/
@@ -103,9 +108,10 @@ src/
 - **PathMapping** (`core/path/mod.rs`): maps FHS paths to ZL-managed paths for a specific package, using SystemProfile
 - **Transaction** (`core/transaction.rs`): atomic install transaction tracking filesystem + DB changes with rollback support
 - **ConflictReport** (`core/conflicts.rs`): pre-install conflict detection (file ownership, binary/library names, version constraints, declared conflicts)
+- **VerifyResult** (`core/verify.rs`): package integrity verification — SHA256 checksum + GPG signature
 - **BuildSpec/BuildSystem** (`core/build/mod.rs`): source build specification with auto-detection of build systems
 - **DepGraph** (`core/graph/model.rs`): petgraph-based dependency graph tracking all packages and their relationships
-- **ZlDatabase** (`core/db/ops.rs`): redb-based persistent storage for installed packages, file ownership, library index, dependency tracking, package pinning
+- **ZlDatabase** (`core/db/ops.rs`): redb-based persistent storage for installed packages, file ownership, library index, dependency tracking, package pinning, multi-version queries
 
 ### Key crates
 | Crate | Purpose |
@@ -120,6 +126,7 @@ src/
 | `indicatif` | Progress bars for downloads and installs |
 | `reqwest` (blocking) | HTTP downloads |
 | `tar` + `zstd` + `flate2` | Archive extraction |
+| `sha2` | SHA256 checksums for package verification |
 
 ### ZL directory layout (runtime)
 ```
@@ -130,6 +137,7 @@ src/
   etc/          # Config files
   packages/     # Per-package directories (name-version/)
   cache/        # Download cache
+  envs/         # Ephemeral/named environment roots
   zl.redb       # Package database (PACKAGES, FILE_OWNERS, LIB_INDEX, DEPENDENCIES, PINNED tables)
 ```
 
@@ -143,6 +151,8 @@ src/
 - **Retry with exponential backoff**: all HTTP operations retry up to 3 times (1s, 2s, 4s)
 - **Atomic transactions**: installs are wrapped in Transaction; on failure, all filesystem + DB changes are rolled back
 - **Pre-install conflict detection**: 5 types of conflicts checked before any files are written
+- **Side-by-side versions**: multiple versions of the same package can coexist, with `zl switch` to change the active one
+- **Ephemeral environments**: temporary isolated shells where packages disappear on exit
 
 ### SystemProfile detection chain
 1. **Architecture**: `std::env::consts::ARCH` (compile-time, always correct for running binary)
@@ -205,15 +215,32 @@ src/
 - [x] `cli/lockfile.rs` — Lockfile: `zl export [file]`, `zl import <file>` (JSON format)
 - [x] `cli/mod.rs` — All new commands wired up: Info, Cache, Completions, Pin, Unpin, Export, Import
 
-### All tests pass: 64 tests
-The project compiles and all 64 tests pass.
+### Phase 4: Security, multi-version, environments, and mass upgrade (complete)
+- [x] `core/verify.rs` — Package verification: SHA256 checksum validation + GPG signature verification (best-effort, uses system gpg when available)
+- [x] `cli/install.rs` — Integrated verification pipeline: all downloads verified before install, `--skip-verify` flag to bypass
+- [x] `cli/install.rs` — Dry-run mode (`--dry-run` / `--simulate`): shows install plan without making changes
+- [x] `cli/remove.rs` — Dry-run support, version-specific removal (`--version`), multi-version aware
+- [x] `cli/update.rs` — Dry-run support, integrated verification
+- [x] `cli/upgrade.rs` — Mass upgrade: `zl upgrade` checks all packages, shows summary, confirms, upgrades in batch. `--check` for preview-only, `--from` to filter by source
+- [x] `cli/install.rs` — Multi-version support: install multiple versions side-by-side (e.g., `zl install firefox --version 120.0` and `--version 121.0`)
+- [x] `cli/install.rs` — `zl switch <pkg> <version>`: change which version's binaries are active (symlinked to bin/)
+- [x] `core/db/ops.rs` — Added `get_all_versions(name)`: query all installed versions of a package
+- [x] `cli/selfupdate.rs` — Self-update: `zl self-update` downloads latest release from GitHub, verifies architecture, atomically replaces binary
+- [x] `cli/env.rs` — Ephemeral environments: `zl env shell [name]` spawns an isolated shell with its own ZL root. Temporary envs are auto-deleted on exit. Named envs persist.
+- [x] `cli/env.rs` — Environment management: `zl env list`, `zl env delete <name>`
+- [x] `cli/mod.rs` — Global flags: `--dry-run`/`--simulate`, `--skip-verify`
+- [x] `error.rs` — New error variants: GpgVerification, SelfUpdate, Environment
+
+### All tests pass: 72 tests
+The project compiles and all 72 tests pass.
 
 ### Removed
 - `core/path/fhs.rs` — replaced by `system/` module. No more hardcoded FHS constants.
 
-### Future work (Phase 4+)
+### Future work (Phase 5+)
 - [ ] Additional plugins: APT, RPM, AppImage, GitHub Releases, pip, npm, cargo
-- [ ] GPG signature verification for downloaded packages
 - [ ] Cross-OS support (macOS/Homebrew via HostAdapter trait)
 - [ ] Interactive conflict resolution (dialoguer is already in deps)
 - [ ] Async HTTP for even faster parallel downloads
+- [ ] Hook system: pre/post install scripts
+- [ ] TUI interactive mode for search and selection

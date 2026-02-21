@@ -121,9 +121,7 @@ fn handle_orphans(
                 pkg.id.name, pkg.id.version, pkg.id.source
             );
         }
-        println!(
-            "\nTo remove orphans: zl remove <name> --cascade"
-        );
+        println!("\nTo remove orphans: zl remove <name> --cascade");
     }
 
     Ok(())

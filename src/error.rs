@@ -110,6 +110,21 @@ pub enum ZlError {
     // ── Config ──
     #[error("Config error: {0}")]
     Config(String),
+
+    // ── GPG/Signature ──
+    #[error("GPG signature verification failed for {path}: {message}")]
+    GpgVerification {
+        path: std::path::PathBuf,
+        message: String,
+    },
+
+    // ── Self-update ──
+    #[error("Self-update failed: {0}")]
+    SelfUpdate(String),
+
+    // ── Environments ──
+    #[error("Environment error: {0}")]
+    Environment(String),
 }
 
 fn format_missing_deps(deps: &[String]) -> String {
@@ -145,6 +160,10 @@ impl ZlError {
             ZlError::PackageConflict { .. } => {
                 Some("Remove the conflicting package first with `zl remove`")
             }
+            ZlError::GpgVerification { .. } => Some(
+                "The package signature is invalid — this may indicate tampering. Use --skip-verify to bypass (not recommended)",
+            ),
+            ZlError::SelfUpdate(_) => Some("Check your internet connection and try again"),
             _ => None,
         }
     }

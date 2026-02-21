@@ -18,6 +18,8 @@ pub struct ZlPaths {
     pub cache: PathBuf,
     /// The redb database file
     pub db_file: PathBuf,
+    /// Ephemeral/named environment roots
+    pub envs: PathBuf,
 }
 
 impl ZlPaths {
@@ -36,6 +38,7 @@ impl ZlPaths {
             packages: root.join("packages"),
             cache: root.join("cache"),
             db_file: root.join("zl.redb"),
+            envs: root.join("envs"),
             root,
         }
     }
@@ -50,6 +53,7 @@ impl ZlPaths {
             &self.etc,
             &self.packages,
             &self.cache,
+            &self.envs,
         ] {
             std::fs::create_dir_all(dir)?;
         }
