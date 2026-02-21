@@ -29,71 +29,241 @@ All translation happens at install time. Once installed, a package runs with zer
 
 ## Installation
 
-### Build from source
+### Option 1 — Pre-built binary (recommended)
+
+Download the latest binary for your architecture from the [releases page](https://github.com/supercosti21/zero_layer/releases):
+
+```bash
+# x86_64
+curl -Lo zl https://github.com/supercosti21/zero_layer/releases/latest/download/zl-x86_64-unknown-linux-musl
+chmod +x zl
+sudo mv zl /usr/local/bin/
+```
+
+```bash
+# aarch64 (Raspberry Pi 4/5, ARM servers, Apple Silicon via Asahi)
+curl -Lo zl https://github.com/supercosti21/zero_layer/releases/latest/download/zl-aarch64-unknown-linux-musl
+chmod +x zl
+sudo mv zl /usr/local/bin/
+```
+
+> **Note:** The musl builds are fully static — no glibc dependency, works on any Linux distro.
+
+Alternatively, install to your home directory (no sudo required):
+
+```bash
+mkdir -p ~/.local/bin
+curl -Lo ~/.local/bin/zl https://github.com/supercosti21/zero_layer/releases/latest/download/zl-x86_64-unknown-linux-musl
+chmod +x ~/.local/bin/zl
+# Make sure ~/.local/bin is in your PATH (see below)
+```
+
+### Option 2 — Build from source
 
 Requires Rust 1.85+ (edition 2024).
+
+**Install Rust** (if not already installed):
+
+```bash
+# Arch Linux
+sudo pacman -S rust
+
+# Other distros
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source ~/.cargo/env
+```
+
+**Clone and build:**
 
 ```bash
 git clone https://github.com/supercosti21/zero_layer.git
 cd zero_layer
 cargo build --release
-# Binary is at target/release/zl
 ```
 
-### Self-update
+**Install the binary:**
 
 ```bash
-zl self-update    # Download and install the latest release
+# System-wide (requires sudo)
+sudo cp target/release/zl /usr/local/bin/
+
+# Or user-local (no sudo)
+mkdir -p ~/.local/bin
+cp target/release/zl ~/.local/bin/
 ```
 
-Add ZL's bin directory to your PATH:
+### Option 3 — Self-update (once ZL is already installed)
 
 ```bash
-export PATH="$HOME/.local/share/zl/bin:$PATH"
+zl self-update    # Download and replace the binary with the latest release
 ```
 
-Enable shell completions:
+---
+
+### Post-install setup
+
+**1. Add ZL's bin directory to your PATH** so that packages installed by ZL are accessible:
 
 ```bash
-# Bash: add to ~/.bashrc
-eval "$(zl completions bash)"
+# Bash — add to ~/.bashrc
+echo 'export PATH="$HOME/.local/share/zl/bin:$PATH"' >> ~/.bashrc
+source ~/.bashrc
 
-# Zsh: add to ~/.zshrc
-eval "$(zl completions zsh)"
+# Zsh — add to ~/.zshrc
+echo 'export PATH="$HOME/.local/share/zl/bin:$PATH"' >> ~/.zshrc
+source ~/.zshrc
 
-# Fish: run once
+# Fish — add to config.fish
+fish_add_path ~/.local/share/zl/bin
+```
+
+Also add `~/.local/bin` to PATH if you installed the binary there:
+
+```bash
+# Bash / Zsh
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc   # or ~/.zshrc
+
+# Fish
+fish_add_path ~/.local/bin
+```
+
+**2. Enable shell completions:**
+
+```bash
+# Bash — add to ~/.bashrc
+echo 'eval "$(zl completions bash)"' >> ~/.bashrc
+
+# Zsh — add to ~/.zshrc
+echo 'eval "$(zl completions zsh)"' >> ~/.zshrc
+
+# Fish — run once
 zl completions fish > ~/.config/fish/completions/zl.fish
+```
+
+**3. Verify the installation:**
+
+```bash
+zl --help
+zl --version
+```
+
+**4. Sync a package index** before installing (required for APT, recommended for Pacman):
+
+```bash
+# Pacman (Arch) — downloads and caches the package database
+zl update --from pacman
+
+# APT (Debian/Ubuntu) — downloads Packages.gz index
+zl update --from apt
 ```
 
 ## Usage
 
-### Install & Remove
+### Quick start
 
 ```bash
-zl install <package>              # Install a package (resolves all dependencies)
-zl install <package> --from pacman # Install from a specific source
-zl install <package> --version 1.0 # Install a specific version
-zl remove <package>                # Remove a package
-zl remove <package> --cascade      # Remove package and orphaned deps
+# Search for a package across all configured sources
+zl search ripgrep
+
+# Install a package (auto-resolves and installs all dependencies)
+zl install ripgrep
+
+# Install from a specific source
+zl install ripgrep --from pacman
+zl install ripgrep --from github    # installs BurntSushi/ripgrep from GitHub Releases
+zl install vim --from apt
+zl install yay --from aur
+
+# Remove a package
+zl remove ripgrep
+
+# List all installed packages
+zl list
+```
+
+### Installing packages
+
+```bash
+# Basic install (ZL picks the best available source)
+zl install <package>
+
+# Specify source explicitly
+zl install <package> --from pacman   # Arch repos
+zl install <package> --from aur      # Arch User Repository (builds from source)
+zl install <package> --from apt      # Debian/Ubuntu repos (sync index first)
+zl install owner/repo --from github  # GitHub Releases (must use owner/repo format)
+
+# Install a specific version
+zl install firefox --version 120.0
+
+# Preview what would be installed without making changes
+zl --dry-run install firefox
+zl --simulate install firefox        # same as --dry-run
+
+# Skip checksum/GPG verification (not recommended)
+zl --skip-verify install <package>
+
+# Auto-confirm all prompts (for scripts)
+zl -y install <package>
+```
+
+**Example — installing from GitHub Releases:**
+
+```bash
+# Must use owner/repo format
+zl install sharkdp/bat --from github
+zl install sharkdp/fd --from github
+zl install BurntSushi/ripgrep --from github
+zl install cli/cli --from github         # GitHub CLI
+
+# Search first to find the full name
+zl search bat --from github
+```
+
+**Example — installing from APT:**
+
+```bash
+# Sync the index first (run once, or when you want to refresh)
+zl update --from apt
+
+# Then install
+zl install vim --from apt
+zl install build-essential --from apt
+```
+
+### Removing packages
+
+```bash
+zl remove <package>                # Remove the package (keeps orphaned deps)
+zl remove <package> --cascade      # Remove package + any deps no longer needed
 zl remove <package> --version 1.0  # Remove a specific version only
+zl --dry-run remove <package>      # Preview what would be removed
 ```
 
 ### Search & Info
 
 ```bash
-zl search <query>                  # Search for packages
-zl search <query> --from pacman    # Search a specific source
+zl search <query>                  # Search all registered sources
+zl search <query> --from pacman    # Search a specific source only
+zl search vim --from apt           # Search APT index (must sync first)
+zl search ripgrep --from github    # Search GitHub repositories
+
 zl info <package>                  # Detailed info about an installed package
+                                   # (version, source, deps, reverse-deps, disk usage)
 ```
 
 ### Update & Upgrade
 
 ```bash
-zl update                          # Update all packages (respects pinned)
+# Sync package indexes and update installed packages
+zl update                          # Update all packages (skips pinned)
 zl update <package>                # Update a specific package
-zl upgrade                         # Mass upgrade: show all available upgrades, confirm, upgrade all
-zl upgrade --check                 # Only show what would be upgraded (no changes)
-zl upgrade --from pacman           # Upgrade only packages from a specific source
+zl update --from pacman            # Update only packages from pacman
+
+# Mass upgrade
+zl upgrade                         # Check all packages, show summary, confirm, then upgrade all
+zl upgrade --check                 # Preview only — show what would be upgraded (no changes)
+zl upgrade --from apt              # Upgrade only packages from a specific source
 ```
 
 ### Multi-Version Management
@@ -106,6 +276,7 @@ zl install python --version 3.12   # Install Python 3.12 alongside 3.11
 zl switch python 3.12              # Activate version 3.12 (update bin/ symlinks)
 zl switch python 3.11              # Switch back to 3.11
 zl remove python --version 3.11    # Remove only version 3.11
+zl list                            # Shows active version with [active] marker
 ```
 
 ### Ephemeral Environments
