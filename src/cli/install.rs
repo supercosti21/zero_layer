@@ -39,11 +39,18 @@ pub fn handle(
         println!("[DRY-RUN] Simulating install of {}...", args.package);
     }
 
-    // 1. Pick plugin and sync
+    // 1. Determine which source to use.
+    //    If --from is given, use it directly.
+    //    Otherwise, resolve from all plugins and let the user pick.
+    let from: String = match args.from.as_deref() {
+        Some(f) => f.to_string(),
+        None => pick_source(&args.package, args.version.as_deref(), registry, auto_yes)?,
+    };
+
     let plugin = registry
-        .get_or_default(args.from.as_deref())
+        .get(&from)
         .ok_or_else(|| ZlError::Plugin {
-            plugin: args.from.as_deref().unwrap_or("default").into(),
+            plugin: from.clone(),
             message: "No matching source plugin found".into(),
         })?;
 
@@ -55,7 +62,7 @@ pub fn handle(
     let plan = deps::resolve_with_deps(
         &args.package,
         args.version.as_deref(),
-        args.from.as_deref(),
+        Some(&from),
         db,
         registry,
     )?;
@@ -694,6 +701,92 @@ pub fn create_bin_symlinks(pkg_dir: &Path, bin_dir: &Path, txn: &mut Transaction
     }
 
     Ok(())
+}
+
+/// When `--from` is not specified, resolve from all plugins and pick a source.
+///
+/// - 0 results  → PackageNotFound error
+/// - 1 result   → auto-select (no prompt)
+/// - N results + auto_yes → pick the first (highest-priority plugin)
+/// - N results  → show interactive `dialoguer::Select`
+fn pick_source(
+    package: &str,
+    version: Option<&str>,
+    registry: &PluginRegistry,
+    auto_yes: bool,
+) -> ZlResult<String> {
+    println!("Searching all sources for '{}'...", package);
+
+    let mut found: Vec<(String, String, String)> = Vec::new(); // (plugin_name, display_label, version)
+
+    for plugin in registry.all() {
+        match plugin.resolve(package, version) {
+            Ok(Some(candidate)) => {
+                let label = format!(
+                    "{} {}  [{}]{}",
+                    candidate.name,
+                    candidate.version,
+                    candidate.source,
+                    if candidate.description.is_empty() {
+                        String::new()
+                    } else {
+                        format!(
+                            " — {}",
+                            candidate.description.chars().take(60).collect::<String>()
+                        )
+                    }
+                );
+                found.push((plugin.name().to_string(), label, candidate.version));
+            }
+            Ok(None) => {}
+            Err(e) => {
+                tracing::debug!(
+                    "Plugin '{}' could not resolve '{}': {}",
+                    plugin.name(),
+                    package,
+                    e
+                );
+            }
+        }
+    }
+
+    match found.len() {
+        0 => Err(ZlError::PackageNotFound {
+            name: package.to_string(),
+        }),
+        1 => {
+            let (source, label, _) = &found[0];
+            println!("Found: {}", label);
+            Ok(source.clone())
+        }
+        _ if auto_yes => {
+            // Non-interactive: pick first (highest-priority plugin)
+            let (source, label, _) = &found[0];
+            println!("Auto-selected: {}", label);
+            Ok(source.clone())
+        }
+        _ => {
+            let items: Vec<&str> = found.iter().map(|(_, label, _)| label.as_str()).collect();
+
+            let selection = dialoguer::Select::with_theme(
+                &dialoguer::theme::ColorfulTheme::default(),
+            )
+            .with_prompt(format!(
+                "Found '{}' in {} sources. Select one",
+                package,
+                found.len()
+            ))
+            .items(&items)
+            .default(0)
+            .interact()
+            .map_err(|e| ZlError::Plugin {
+                plugin: "interactive".into(),
+                message: format!("Selection cancelled: {}", e),
+            })?;
+
+            Ok(found[selection].0.clone())
+        }
+    }
 }
 
 fn is_executable(path: &Path) -> bool {
