@@ -46,8 +46,6 @@ struct GhSearchResponse {
 #[derive(serde::Deserialize)]
 struct GhRepo {
     full_name: String,
-    name: String,
-    description: Option<String>,
 }
 
 // ── Plugin struct ─────────────────────────────────────────────────────────────

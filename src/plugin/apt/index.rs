@@ -14,7 +14,6 @@ pub struct AptEntry {
     pub description: String,
     pub installed_size: u64, // in KiB
     pub filename: String,
-    pub size: u64, // download size in bytes
     pub sha256: Option<String>,
     pub depends: Vec<String>,
     pub conflicts: Vec<String>,
@@ -83,10 +82,6 @@ fn build_entry(fields: &HashMap<&str, String>) -> Option<AptEntry> {
             .and_then(|s| s.parse().ok())
             .unwrap_or(0),
         filename,
-        size: fields
-            .get("Size")
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0),
         sha256: fields.get("SHA256").cloned(),
         depends: parse_dep_list(fields.get("Depends").map(String::as_str).unwrap_or("")),
         conflicts: parse_dep_list(fields.get("Conflicts").map(String::as_str).unwrap_or("")),

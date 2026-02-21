@@ -258,7 +258,7 @@ impl SourcePlugin for AptPlugin {
     fn sync(&self) -> ZlResult<()> {
         let mut all_entries = Vec::new();
 
-        for component in &self.components.clone() {
+        for component in &self.components {
             match self.sync_component(component) {
                 Ok(entries) => all_entries.extend(entries),
                 Err(e) => tracing::warn!("Failed to sync {}/{}: {}", self.suite, component, e),

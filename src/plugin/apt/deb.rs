@@ -24,7 +24,7 @@ pub fn extract(deb_path: &Path, metadata: PackageCandidate) -> ZlResult<Extracte
     let mut found_data = false;
 
     while let Some(entry) = ar_archive.next_entry() {
-        let mut entry = entry.map_err(|e| ZlError::Archive(format!("ar error: {}", e)))?;
+        let entry = entry.map_err(|e| ZlError::Archive(format!("ar error: {}", e)))?;
         let name = String::from_utf8_lossy(entry.header().identifier())
             .trim()
             .to_string();
