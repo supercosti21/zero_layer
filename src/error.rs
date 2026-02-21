@@ -163,6 +163,9 @@ impl ZlError {
             ZlError::GpgVerification { .. } => Some(
                 "The package signature is invalid — this may indicate tampering. Use --skip-verify to bypass (not recommended)",
             ),
+            ZlError::SelfUpdate(msg) if msg.contains("Permission denied") => {
+                Some("Run with elevated permissions: sudo zl self-update")
+            }
             ZlError::SelfUpdate(_) => Some("Check your internet connection and try again"),
             _ => None,
         }
