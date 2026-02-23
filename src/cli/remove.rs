@@ -127,6 +127,17 @@ pub fn handle(args: RemoveArgs, ctx: &AppContext) -> ZlResult<()> {
 
     println!("Removed {}-{}.", node.id.name, node.id.version);
 
+    // Record in history
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let _ = db.record_history(&crate::core::db::ops::HistoryEntry {
+        timestamp: now,
+        action: crate::core::db::ops::HistoryAction::Remove,
+        packages: vec![format!("{}-{}", node.id.name, node.id.version)],
+    });
+
     // 7. Cascade: remove orphans if requested
     if args.cascade {
         remove_orphans(paths, db, dry_run)?;
@@ -236,6 +247,14 @@ fn remove_single(
 
     println!("Removed {}-{}.", node.id.name, node.id.version);
     Ok(())
+}
+
+/// Public wrapper for use by the history/rollback module
+pub fn remove_bin_symlinks_public(
+    installed_files: &[std::path::PathBuf],
+    bin_dir: &std::path::Path,
+) -> ZlResult<()> {
+    remove_bin_symlinks(installed_files, bin_dir)
 }
 
 /// Remove symlinks from bin/ that point into the package's installed files

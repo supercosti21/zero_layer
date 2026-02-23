@@ -50,6 +50,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Progress bars and user interaction
 indicatif = "0.17"
 dialoguer = "0.11"
+console = "0.15"
 
 # File hashing
 sha2 = "0.10"

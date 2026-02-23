@@ -123,6 +123,13 @@ fn run(cli_args: cli::Cli) -> anyhow::Result<()> {
         cli::Commands::Switch(args) => cli::install::handle_switch(args, ctx.paths, ctx.db)?,
         cli::Commands::SelfUpdate => unreachable!("handled above"),
         cli::Commands::Env(cmd) => cli::env::handle(cmd, ctx.paths, &config, ctx.profile)?,
+        cli::Commands::Run(args) => cli::run::handle(args, &ctx)?,
+        cli::Commands::History(cmd) => cli::history::handle(cmd, &ctx)?,
+        cli::Commands::Why(args) => cli::why::handle(args, ctx.db)?,
+        cli::Commands::Doctor => cli::doctor::handle(&ctx)?,
+        cli::Commands::Size(args) => cli::size::handle(args, ctx.db)?,
+        cli::Commands::Diff(args) => cli::diff::handle(args, &ctx)?,
+        cli::Commands::Audit(args) => cli::audit::handle(args, ctx.db)?,
     }
 
     Ok(())

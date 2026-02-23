@@ -76,4 +76,59 @@ impl PluginRegistry {
             None => self.plugins.first().map(|p| p.as_ref()),
         }
     }
+
+    /// List all registered plugin names and their display names
+    #[allow(dead_code)]
+    pub fn list_info(&self) -> Vec<PluginInfo> {
+        self.plugins
+            .iter()
+            .map(|p| PluginInfo {
+                name: p.name().to_string(),
+                display_name: p.display_name().to_string(),
+                builtin: true,
+            })
+            .collect()
+    }
+}
+
+/// Metadata about a plugin (for registry listing)
+#[allow(dead_code)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PluginInfo {
+    pub name: String,
+    pub display_name: String,
+    pub builtin: bool,
+}
+
+/// Remote plugin registry: fetch available plugins from a URL.
+/// Returns a list of PluginInfo for plugins available in the registry.
+#[allow(dead_code)]
+pub fn fetch_remote_registry(registry_url: &str) -> ZlResult<Vec<PluginInfo>> {
+    let client = reqwest::blocking::Client::builder()
+        .user_agent("zero-layer/0.1")
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .unwrap_or_default();
+
+    let resp = client
+        .get(registry_url)
+        .send()
+        .map_err(|e| crate::error::ZlError::Plugin {
+            plugin: "registry".into(),
+            message: format!("Failed to fetch registry: {}", e),
+        })?;
+
+    if !resp.status().is_success() {
+        return Err(crate::error::ZlError::Plugin {
+            plugin: "registry".into(),
+            message: format!("Registry returned HTTP {}", resp.status()),
+        });
+    }
+
+    let plugins: Vec<PluginInfo> = resp.json().map_err(|e| crate::error::ZlError::Plugin {
+        plugin: "registry".into(),
+        message: format!("Failed to parse registry response: {}", e),
+    })?;
+
+    Ok(plugins)
 }
