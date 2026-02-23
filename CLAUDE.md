@@ -14,6 +14,7 @@ These rules are **mandatory** for every Claude instance working on this repo.
 6. **Atomic commits** — 1 commit = 1 concept. Better 3 small focused commits than 1 giant commit. Each commit should be self-contained and pass CI on its own.
 7. **Commit message format** — `type: clear title` where type is `feat`, `fix`, `chore`, `refactor`, or `docs`. Add bullet points in the body for details when needed.
 8. **Documentation** — After every significant change, update `CLAUDE.md` first (implementation state, module structure, test count), then `README.md` if user-facing features changed.
+9. **GitHub metadata** — When changes affect the project scope, features, or tech stack, update the GitHub repository description and topics to stay in sync. See the "GitHub Metadata" section below for current values and the `gh` commands to update them.
 
 ## Project Overview
 
@@ -195,3 +196,29 @@ Each CLI command lives in `src/cli/<command>.rs` with a `pub fn handle(...)` fun
 - `DepGraph`, `DependencyEdge`, `DepType` have `#[allow(dead_code)]` — they are part of the graph model used for future features
 - `ArchMismatch` error variant has `#[allow(dead_code)]` — available for strict arch enforcement in future
 - `PluginInfo`, `fetch_remote_registry`, `list_info` have `#[allow(dead_code)]` — scaffolding for remote plugin marketplace
+
+## GitHub Metadata
+
+Keep the repository description and topics in sync with the project state. Update them whenever features, scope, or tech stack change significantly.
+
+### Current description
+
+```
+Universal Linux package manager with native binary translation. Install packages from any source (pacman, apt, AUR, GitHub releases) on any Linux system — no containers, no VMs, zero runtime overhead. Written in Rust.
+```
+
+### Current topics
+
+```
+linux, package-manager, rust, elf, binary-translation, cli, apt, pacman, aur, cross-distribution, dependency-management
+```
+
+### Commands to update
+
+```bash
+# Set description
+gh repo edit --description "Universal Linux package manager with native binary translation. Install packages from any source (pacman, apt, AUR, GitHub releases) on any Linux system — no containers, no VMs, zero runtime overhead. Written in Rust."
+
+# Set topics (replaces all topics)
+gh repo edit --add-topic linux --add-topic package-manager --add-topic rust --add-topic elf --add-topic binary-translation --add-topic cli --add-topic apt --add-topic pacman --add-topic aur --add-topic cross-distribution --add-topic dependency-management
+```
