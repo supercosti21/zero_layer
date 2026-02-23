@@ -30,7 +30,7 @@ These rules are **mandatory** for every Claude instance working on this repo.
 cargo build                  # Debug build
 cargo build --release        # Release build
 cargo run -- <subcommand>    # Run (e.g., cargo run -- install firefox)
-cargo test                   # Run all tests (209 tests: 92 bin + 117 lib)
+cargo test                   # Run all tests (264 tests: 118 bin + 146 lib)
 cargo test <name>            # Run a single test by name
 cargo test -- --nocapture    # Run tests with stdout visible
 cargo clippy                 # Lint
@@ -121,15 +121,43 @@ All plugins implement `SourcePlugin` and are registered in `main.rs`. To add a n
 2. Add `pub mod <name>;` in `src/plugin/mod.rs`
 3. Instantiate and register in `main.rs`'s `run()` function
 
-Current plugins: `pacman` (Arch repos), `aur` (AUR RPC v5 + makepkg, with `-bin` variant discovery), `apt` (Packages.gz + .deb), `github` (Releases API).
+Current plugins (13 total):
+- **`pacman`** — Arch Linux repositories (syncs .db files, pkg.tar.zst extraction)
+- **`aur`** — AUR RPC v5 + makepkg (with `-bin` variant discovery)
+- **`apt`** — Debian/Ubuntu (Packages.gz + .deb extraction)
+- **`dnf`** — Fedora/RHEL/CentOS (RPM repodata XML + shared RPM extraction)
+- **`zypper`** — openSUSE/SLES (RPM repodata, shares RPM module with dnf)
+- **`apk`** — Alpine Linux (APKINDEX.tar.gz + .apk tar.gz)
+- **`xbps`** — Void Linux (binary plist repodata + tar.zst)
+- **`portage`** — Gentoo binhost (Packages index + .tbz2/.gpkg.tar)
+- **`nix`** — Nix packages (search.nixos.org API + NAR archive extraction)
+- **`flatpak`** — Flathub (Flathub API v2 + flatpak CLI)
+- **`snap`** — Snapcraft Store (API v2 + squashfs)
+- **`appimage`** — AppImageHub (feed.json + self-contained executables)
+- **`github`** — GitHub Releases (API + smart asset selection)
+
+Shared modules: `plugin/rpm/` (RPM repodata XML parsing + cpio extraction, used by dnf + zypper).
 
 Remote plugin registry: `fetch_remote_registry()` fetches `PluginInfo` from a URL for future plugin marketplace.
+
+### Source filtering
+
+Users control which plugins ZL loads via three mechanisms:
+
+1. **Config file** (`~/.config/zl/config.toml`):
+   ```toml
+   [general]
+   sources = ["pacman", "aur", "apt", "github"]  # whitelist; omit for all
+   ```
+2. **`zl sources` command**: `list`, `enable <names>`, `disable <names>`, `only <names>`, `reset`
+3. **`--from` flag** (per-command): `--from pacman,apt` (comma-separated list)
+4. **First-run wizard**: on first launch (no config.toml), auto-detects distro and lets user pick sources interactively
 
 ### Command dispatch pattern
 
 Each CLI command lives in `src/cli/<command>.rs` with a `pub fn handle(...)` function. Most `handle` functions receive the parsed args struct plus an `AppContext` reference (defined in `cli/mod.rs`), which bundles shared state: `ZlPaths`, `ZlDatabase`, `PluginRegistry`, `SystemProfile`, and flags (`auto_yes`, `dry_run`, `skip_verify`). Commands are dispatched via a `match` in `main.rs`.
 
-**Full command list**: `install`, `remove`, `search`, `update`, `upgrade`, `list`, `info`, `cache` (list/clean/dedup), `completions`, `pin`, `unpin`, `export`, `import`, `switch`, `self-update`, `env` (shell/list/delete), `run`, `history` (list/rollback), `why`, `doctor`, `size`, `diff`, `audit`.
+**Full command list**: `install`, `remove`, `search`, `update`, `upgrade`, `list`, `info`, `cache` (list/clean/dedup), `completions`, `pin`, `unpin`, `export`, `import`, `switch`, `self-update`, `env` (shell/list/delete), `run`, `history` (list/rollback), `why`, `doctor`, `size`, `diff`, `audit`, `sources` (list/enable/disable/only/reset).
 
 ### Error handling
 
@@ -177,12 +205,14 @@ Each CLI command lives in `src/cli/<command>.rs` with a `pub fn handle(...)` fun
 | `sha2` | SHA256 checksums |
 | `indicatif` + `dialoguer` | Progress bars and interactive prompts |
 | `console` | Colored terminal output |
+| `quick-xml` | RPM repodata XML parsing (dnf, zypper plugins) |
+| `cpio` | RPM payload extraction (cpio archives inside RPMs) |
 
 ### Code quality
 
 - **Zero clippy warnings**: `cargo clippy -- -D warnings` passes clean
 - **Zero `cargo fmt` diff**: all code is formatted
-- **209 tests**: comprehensive coverage of core modules (conflicts, ELF, path mapping, DB, graph, transaction, verify, plugins, search scoring, system detection, cache dedup, run, doctor, size, history, why)
+- **264 tests**: comprehensive coverage of core modules (conflicts, ELF, path mapping, DB, graph, transaction, verify, plugins, search scoring, system detection, cache dedup, run, doctor, size, history, why, RPM repodata, NAR, source filtering)
 
 ### Naming conventions
 
@@ -210,7 +240,7 @@ Universal Linux package manager with native binary translation. Install packages
 ### Current topics
 
 ```
-linux, package-manager, rust, elf, binary-translation, cli, apt, pacman, aur, cross-distribution, dependency-management
+linux, package-manager, rust, elf, binary-translation, cli, apt, pacman, aur, dnf, nix, flatpak, cross-distribution, dependency-management
 ```
 
 ### Commands to update
