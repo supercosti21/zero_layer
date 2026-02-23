@@ -88,13 +88,23 @@ fn search_parallel<'a>(
 
 pub fn handle(args: SearchArgs, registry: &PluginRegistry) -> ZlResult<()> {
     let plugins = match args.from.as_deref() {
-        Some(name) => match registry.get(name) {
-            Some(p) => vec![p],
-            None => {
-                eprintln!("Unknown source: {}", name);
+        Some(from_str) => {
+            // Support comma-separated source list: --from pacman,apt,aur
+            let names: Vec<&str> = from_str.split(',').map(|s| s.trim()).collect();
+            let mut matched = Vec::new();
+            for name in &names {
+                match registry.get(name) {
+                    Some(p) => matched.push(p),
+                    None => {
+                        eprintln!("Unknown source: {}", name);
+                    }
+                }
+            }
+            if matched.is_empty() {
                 return Ok(());
             }
-        },
+            matched
+        }
         None => registry.all(),
     };
 
