@@ -130,3 +130,12 @@ Each CLI command lives in `src/cli/<command>.rs` with a `pub fn handle(...)` fun
 - **Zero clippy warnings**: `cargo clippy -- -D warnings` passes clean
 - **Zero `cargo fmt` diff**: all code is formatted
 - **186 tests**: comprehensive coverage of core modules (conflicts, ELF, path mapping, DB, graph, transaction, verify, plugins, system detection)
+
+### Naming conventions
+
+- `SystemLayout` variants use PascalCase: `Fhs`, `MergedUsr`, `NixOS`, `Guix`, `Termux`, `GoboLinux`, `Custom`
+- `Conflict` variants avoid repeating the enum name: `Declared` (not `DeclaredConflict`), `Version` (not `VersionConflict`)
+- `Arch::parse()` and `SystemLayout::parse()` instead of `from_str()` (avoids confusion with `std::str::FromStr` trait)
+- Structs with simple `new()` constructors also implement `Default` (via `#[derive(Default)]` or manual impl): `PluginRegistry`, `PacmanPlugin`, `AptPlugin`, `AurPlugin`, `GithubPlugin`, `DepGraph`, `Transaction`
+- The `core/build/` module uses `#![allow(dead_code)]` since it is scaffolding for future source-build support
+- `DepGraph`, `DependencyEdge`, `DepType` have `#[allow(dead_code)]` — they are part of the graph model used for future features
