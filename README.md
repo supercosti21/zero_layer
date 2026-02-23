@@ -305,11 +305,41 @@ zl pin <package>                   # Pin a package (prevent updates)
 zl unpin <package>                 # Unpin a package (allow updates)
 ```
 
+### Run Without Installing
+
+```bash
+zl run <package>                   # Download, patch, execute, then cleanup
+zl run <package> --from github     # Run from a specific source
+zl run <package> -- --help         # Pass args to the binary
+```
+
+### Diagnostics & Analysis
+
+```bash
+zl doctor                          # Full system health check (DB, symlinks, libs, orphans)
+zl why <package>                   # Show why a package is installed (dependency chain)
+zl size                            # Disk usage per package
+zl size <package>                  # Detailed breakdown with file sizes and dep costs
+zl size --sort                     # Sort by size (largest first)
+zl diff <package>                  # Show what would change if updated
+zl audit                           # Check all packages for known CVEs (via OSV.dev)
+zl audit <package>                 # Check a specific package
+```
+
+### History & Rollback
+
+```bash
+zl history list                    # Show install/remove/upgrade history
+zl history rollback                # Undo the last operation
+zl history rollback 3              # Undo the last 3 operations
+```
+
 ### Cache Management
 
 ```bash
 zl cache list                      # Show cached downloads and sizes
 zl cache clean                     # Remove all cached files
+zl cache dedup                     # Deduplicate shared libraries (hardlinks)
 ```
 
 ### Lockfile Export/Import
@@ -530,10 +560,15 @@ ZL can build packages from source when precompiled binaries aren't available. It
 - **5-way conflict detection** — prevents broken installs before they happen
 - **Multi-version packages** — install multiple versions side-by-side, switch between them
 - **Ephemeral environments** — isolated shells where packages disappear on exit
-- **ELF patching with `elb`** — pure-Rust patchelf alternative, sets interpreter and RUNPATH
+- **ELF patching with `elb`** — pure-Rust patchelf alternative, sets interpreter and RUNPATH, parallel patching for multi-ELF packages
 - **RUNPATH over RPATH** — modern standard, respects `LD_LIBRARY_PATH`
 - **`redb` database** — pure-Rust embedded key-value store (ACID, no SQLite/C dependency)
 - **`petgraph` dependency graph** — topological sort, cycle detection, orphan detection
+- **Cross-source dependency resolution** — when a dep is not found in the primary source, queries all other sources and lets the user choose
+- **Colored output** — uses `console` crate for colored output throughout (search, list, doctor, audit, diff, size)
+- **CVE auditing** — checks installed packages against the OSV.dev vulnerability database
+- **History & rollback** — all install/remove events are recorded; undo recent operations
+- **Cache deduplication** — identical shared libraries are hardlinked to save disk space
 
 ## Configuration
 
@@ -562,7 +597,7 @@ repos = ["core", "extra"]
 
 ```bash
 cargo build              # Build
-cargo test               # Run all tests (195 tests: 103 bin + 92 lib)
+cargo test               # Run all tests (209 tests: 92 bin + 117 lib)
 cargo test <name>        # Run a single test
 cargo clippy             # Lint
 cargo fmt                # Format
