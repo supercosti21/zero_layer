@@ -20,22 +20,13 @@ use crate::plugin::{PackageCandidate, PluginRegistry, SourcePlugin};
 use crate::system::SystemProfile;
 
 use super::deps;
-use super::{InstallArgs, SwitchArgs};
+use super::{AppContext, InstallArgs, SwitchArgs};
 
 /// Maximum number of concurrent downloads
 const MAX_PARALLEL_DOWNLOADS: usize = 4;
 
-pub fn handle(
-    args: InstallArgs,
-    paths: &ZlPaths,
-    db: &ZlDatabase,
-    registry: &PluginRegistry,
-    profile: &SystemProfile,
-    auto_yes: bool,
-    dry_run: bool,
-    skip_verify: bool,
-) -> ZlResult<()> {
-    if dry_run {
+pub fn handle(args: InstallArgs, ctx: &AppContext) -> ZlResult<()> {
+    if ctx.dry_run {
         println!("[DRY-RUN] Simulating install of {}...", args.package);
     }
 
@@ -44,15 +35,18 @@ pub fn handle(
     //    Otherwise, resolve from all plugins and let the user pick.
     let from: String = match args.from.as_deref() {
         Some(f) => f.to_string(),
-        None => pick_source(&args.package, args.version.as_deref(), registry, auto_yes)?,
+        None => pick_source(
+            &args.package,
+            args.version.as_deref(),
+            ctx.registry,
+            ctx.auto_yes,
+        )?,
     };
 
-    let plugin = registry
-        .get(&from)
-        .ok_or_else(|| ZlError::Plugin {
-            plugin: from.clone(),
-            message: "No matching source plugin found".into(),
-        })?;
+    let plugin = ctx.registry.get(&from).ok_or_else(|| ZlError::Plugin {
+        plugin: from.clone(),
+        message: "No matching source plugin found".into(),
+    })?;
 
     println!("Syncing package database from {}...", plugin.display_name());
     plugin.sync()?;
@@ -63,9 +57,9 @@ pub fn handle(
         &args.package,
         args.version.as_deref(),
         Some(&from),
-        db,
-        registry,
-        profile,
+        ctx.db,
+        ctx.registry,
+        ctx.profile,
     )?;
 
     if plan.packages.is_empty() {
@@ -77,11 +71,11 @@ pub fn handle(
     println!("Checking for conflicts...");
     let candidates_refs: Vec<&PackageCandidate> =
         plan.packages.iter().map(|e| &e.candidate).collect();
-    let conflict_report = conflicts::check_conflicts(&candidates_refs, db, paths)?;
+    let conflict_report = conflicts::check_conflicts(&candidates_refs, ctx.db, ctx.paths)?;
 
     if conflict_report.has_conflicts() {
         conflict_report.display();
-        if !auto_yes {
+        if !ctx.auto_yes {
             eprintln!("\nConflicts must be resolved before installing.");
             eprintln!("  hint: remove conflicting packages with `zl remove` first");
             return Err(ZlError::PackageConflict {
@@ -95,7 +89,7 @@ pub fn handle(
     // 4. Display install plan
     deps::display_plan(&plan);
 
-    if dry_run {
+    if ctx.dry_run {
         println!(
             "\n[DRY-RUN] Would install {} package(s). No changes made.",
             plan.packages.len()
@@ -104,7 +98,7 @@ pub fn handle(
     }
 
     // 5. Confirm
-    if !auto_yes {
+    if !ctx.auto_yes {
         print!("\nProceed with installation? [Y/n] ");
         use std::io::Write;
         std::io::stdout().flush()?;
@@ -122,7 +116,7 @@ pub fn handle(
     let candidates: Vec<&PackageCandidate> = plan.packages.iter().map(|e| &e.candidate).collect();
 
     println!("\nDownloading {} package(s)...", total);
-    let archives = download_parallel(&candidates, plugin, &paths.cache)?;
+    let archives = download_parallel(&candidates, plugin, &ctx.paths.cache)?;
 
     // 7. Verify all downloads
     println!("Verifying packages...");
@@ -131,9 +125,9 @@ pub fn handle(
             archive_path,
             candidate.checksum.as_deref(),
             &candidate.download_url,
-            skip_verify,
+            ctx.skip_verify,
         )?;
-        if !skip_verify {
+        if !ctx.skip_verify {
             tracing::info!("  {} — {}", candidate.name, result.message);
         }
     }
@@ -158,10 +152,10 @@ pub fn handle(
             &entry.candidate,
             archive_path,
             entry.explicit,
-            paths,
-            db,
+            ctx.paths,
+            ctx.db,
             plugin,
-            profile,
+            ctx.profile,
             &mut txn,
         ) {
             Ok(()) => {
@@ -171,7 +165,7 @@ pub fn handle(
                 install_pb.finish_and_clear();
                 eprintln!("\nFailed to install {}: {}", entry.candidate.name, e);
                 eprintln!("Rolling back {} installed package(s)...", installed_count);
-                txn.rollback(db);
+                txn.rollback(ctx.db);
                 return Err(e);
             }
         }
@@ -308,7 +302,9 @@ fn download_parallel(
     overall.finish_and_clear();
 
     // Collect results, fail on first error
-    let results = results_mutex.into_inner().unwrap_or_else(|e| e.into_inner());
+    let results = results_mutex
+        .into_inner()
+        .unwrap_or_else(|e| e.into_inner());
     results.into_iter().collect()
 }
 
@@ -374,6 +370,7 @@ pub fn install_single_package(
 /// Install a package from an already-downloaded archive.
 /// Extracts, patches ELF binaries, remaps scripts, places files, and registers in DB.
 /// Tracks all changes in the transaction for rollback support.
+#[allow(clippy::too_many_arguments)]
 pub fn install_from_archive(
     candidate: &PackageCandidate,
     archive_path: &Path,
@@ -404,6 +401,18 @@ pub fn install_from_archive(
     let mapping =
         PathMapping::for_package(&paths.root, &candidate.name, &candidate.version, profile);
 
+    // Check architecture compatibility of ELF binaries before patching
+    for elf_path in &extracted.elf_files {
+        if let Ok(info) = analysis::analyze(elf_path) {
+            if let Err(msg) = analysis::check_arch_compat(&info, &profile.arch) {
+                eprintln!("  Warning: {}", msg);
+                eprintln!("    This package may not work on your system.");
+            }
+            // Only check the first ELF to avoid spam
+            break;
+        }
+    }
+
     // Patch ELF binaries
     for elf_path in &extracted.elf_files {
         match analysis::analyze(elf_path) {
@@ -421,7 +430,11 @@ pub fn install_from_archive(
     // Remap scripts
     for script_path in &extracted.script_files {
         if let Err(e) = remapper::remap_shebang(script_path, &mapping) {
-            tracing::warn!("Failed to remap shebang in {}: {}", script_path.display(), e);
+            tracing::warn!(
+                "Failed to remap shebang in {}: {}",
+                script_path.display(),
+                e
+            );
         }
         if let Err(e) = remapper::remap_text_file(script_path, &mapping) {
             tracing::warn!("Failed to remap paths in {}: {}", script_path.display(), e);
@@ -455,12 +468,11 @@ pub fn install_from_archive(
         installed_files.push(dest.clone());
 
         // Track shared libraries
-        if analysis::is_elf_file(&dest) {
-            if let Ok(info) = analysis::analyze(&dest) {
-                if let Some(ref soname) = info.soname {
-                    provides_libs.insert(soname.clone(), dest.clone());
-                }
-            }
+        if analysis::is_elf_file(&dest)
+            && let Ok(info) = analysis::analyze(&dest)
+            && let Some(ref soname) = info.soname
+        {
+            provides_libs.insert(soname.clone(), dest.clone());
         }
     }
 
@@ -526,7 +538,7 @@ pub fn install_from_archive(
         },
         installed_files: installed_files.clone(),
         provides_libs: provides_libs.clone(),
-        needs_libs,
+        needs_libs: needs_libs.clone(),
         installed_at: now,
         explicit,
     };
@@ -540,7 +552,7 @@ pub fn install_from_archive(
     for file in &installed_files {
         db.register_file(&file.to_string_lossy(), &pkg_key)?;
     }
-    for (soname, _) in &provides_libs {
+    for soname in provides_libs.keys() {
         db.register_lib(soname, &pkg_key)?;
     }
 
@@ -561,6 +573,35 @@ pub fn install_from_archive(
     if !verification.all_ok {
         let report = crate::core::graph::verifier::format_report(&verification);
         eprintln!("  Warning: {}", report);
+    }
+
+    // Post-install: check for missing shared libraries
+    let mut missing_libs = Vec::new();
+    for lib in &needs_libs {
+        // Check if provided by another ZL package
+        if db.lib_provider(lib)?.is_some() {
+            continue;
+        }
+        // Check if found on the host system
+        if profile.system_lib_exists(lib) {
+            continue;
+        }
+        // Check if provided by this package itself
+        if lib_index_paths.contains_key(lib) {
+            continue;
+        }
+        missing_libs.push(lib.as_str());
+    }
+    if !missing_libs.is_empty() {
+        eprintln!(
+            "  Warning: {} missing shared lib(s) for {}:",
+            missing_libs.len(),
+            candidate.name
+        );
+        for lib in &missing_libs {
+            eprintln!("    - {}", lib);
+        }
+        eprintln!("    hint: install the providing package or check your system libraries");
     }
 
     tracing::info!(
@@ -651,10 +692,10 @@ fn remove_pkg_bin_symlinks(pkg_dir: &Path, bin_dir: &Path) -> ZlResult<()> {
     for entry in entries {
         let entry = entry?;
         let path = entry.path();
-        if let Ok(target) = std::fs::read_link(&path) {
-            if target.starts_with(pkg_dir) {
-                std::fs::remove_file(&path)?;
-            }
+        if let Ok(target) = std::fs::read_link(&path)
+            && target.starts_with(pkg_dir)
+        {
+            std::fs::remove_file(&path)?;
         }
     }
     Ok(())
@@ -662,7 +703,7 @@ fn remove_pkg_bin_symlinks(pkg_dir: &Path, bin_dir: &Path) -> ZlResult<()> {
 
 /// Remove lib symlinks for a specific package version
 fn remove_pkg_lib_symlinks(node: &PackageNode, lib_dir: &Path) -> ZlResult<()> {
-    for (soname, _) in &node.provides_libs {
+    for soname in node.provides_libs.keys() {
         let link_path = lib_dir.join(soname);
         if link_path.symlink_metadata().is_ok() {
             std::fs::remove_file(&link_path)?;
@@ -741,37 +782,42 @@ fn install_xdg_assets(pkg_dir: &Path, bin_dir: &Path, txn: &mut Transaction) {
         if !src_dir.is_dir() {
             continue;
         }
-        if let Ok(()) = std::fs::create_dir_all(&xdg_apps) {
-            if let Ok(entries) = std::fs::read_dir(&src_dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.extension().and_then(|e| e.to_str()) != Some("desktop") {
+        if let Ok(()) = std::fs::create_dir_all(&xdg_apps)
+            && let Ok(entries) = std::fs::read_dir(&src_dir)
+        {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("desktop") {
+                    continue;
+                }
+                let dest = xdg_apps.join(entry.file_name());
+                // Rewrite Exec= to strip absolute path prefixes
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    let patched = patch_desktop_exec(&content, bin_dir);
+                    if let Err(e) = std::fs::write(&dest, patched) {
+                        tracing::warn!("Failed to write .desktop {}: {}", dest.display(), e);
                         continue;
                     }
-                    let dest = xdg_apps.join(entry.file_name());
-                    // Rewrite Exec= to strip absolute path prefixes
-                    if let Ok(content) = std::fs::read_to_string(&path) {
-                        let patched = patch_desktop_exec(&content, bin_dir);
-                        if let Err(e) = std::fs::write(&dest, patched) {
-                            tracing::warn!("Failed to write .desktop {}: {}", dest.display(), e);
-                            continue;
-                        }
-                    } else {
-                        // Fallback: symlink as-is
-                        if let Err(e) = unix_fs::symlink(&path, &dest) {
-                            tracing::warn!("Failed to link .desktop {}: {}", dest.display(), e);
-                            continue;
-                        }
+                } else {
+                    // Fallback: symlink as-is
+                    if let Err(e) = unix_fs::symlink(&path, &dest) {
+                        tracing::warn!("Failed to link .desktop {}: {}", dest.display(), e);
+                        continue;
                     }
-                    txn.track_symlink(&dest);
-                    tracing::debug!("Desktop entry: {}", dest.display());
                 }
+                txn.track_symlink(&dest);
+                tracing::debug!("Desktop entry: {}", dest.display());
             }
         }
     }
 
     // Icons (preserve full subdirectory tree)
-    for subdir in &["usr/share/icons", "share/icons", "usr/share/pixmaps", "share/pixmaps"] {
+    for subdir in &[
+        "usr/share/icons",
+        "share/icons",
+        "usr/share/pixmaps",
+        "share/pixmaps",
+    ] {
         let src_dir = pkg_dir.join(subdir);
         if !src_dir.is_dir() {
             continue;
@@ -785,10 +831,10 @@ fn install_xdg_assets(pkg_dir: &Path, bin_dir: &Path, txn: &mut Transaction) {
                 Err(_) => continue,
             };
             let dest = xdg_icons.join(rel);
-            if let Some(parent) = dest.parent() {
-                if std::fs::create_dir_all(parent).is_err() {
-                    continue;
-                }
+            if let Some(parent) = dest.parent()
+                && std::fs::create_dir_all(parent).is_err()
+            {
+                continue;
             }
             if dest.symlink_metadata().is_ok() {
                 continue; // don't overwrite existing icon
@@ -826,7 +872,21 @@ fn patch_desktop_exec(content: &str, _bin_dir: &Path) -> String {
         .join("\n")
 }
 
+/// Represents a single install option found across all sources.
+struct InstallOption {
+    /// Plugin name (e.g. "pacman", "aur", "github")
+    plugin_name: String,
+    /// The resolved package candidate
+    candidate: PackageCandidate,
+    /// Human-readable label for the interactive picker
+    label: String,
+}
+
 /// When `--from` is not specified, resolve from all plugins and pick a source.
+///
+/// Queries ALL sources in parallel (including AUR `-bin` variants) and presents
+/// a comprehensive list so the user can choose between binary vs source builds,
+/// different repos, etc.
 ///
 /// - 0 results  → PackageNotFound error
 /// - 1 result   → auto-select (no prompt)
@@ -840,81 +900,170 @@ fn pick_source(
 ) -> ZlResult<String> {
     println!("Searching all sources for '{}'...", package);
 
-    let mut found: Vec<(String, String, String)> = Vec::new(); // (plugin_name, display_label, version)
+    let plugins = registry.all();
+    let found: std::sync::Mutex<Vec<InstallOption>> = std::sync::Mutex::new(Vec::new());
 
-    for plugin in registry.all() {
-        // Sync first so the local DB is up to date before querying
-        if let Err(e) = plugin.sync() {
-            tracing::debug!("Failed to sync {} during source discovery: {}", plugin.name(), e);
-        }
+    // Query all plugins in parallel
+    std::thread::scope(|scope| {
+        let found = &found;
+        let mut handles = Vec::new();
 
-        match plugin.resolve(package, version) {
-            Ok(Some(candidate)) => {
-                let label = format!(
-                    "{} {}  [{}]{}",
-                    candidate.name,
-                    candidate.version,
-                    candidate.source,
-                    if candidate.description.is_empty() {
-                        String::new()
-                    } else {
-                        format!(
-                            " — {}",
-                            candidate.description.chars().take(60).collect::<String>()
-                        )
+        for plugin in &plugins {
+            handles.push(scope.spawn(move || {
+                // Sync first so the local DB is up to date
+                if let Err(e) = plugin.sync() {
+                    tracing::debug!(
+                        "Failed to sync {} during source discovery: {}",
+                        plugin.name(),
+                        e
+                    );
+                }
+
+                // Resolve exact name
+                match plugin.resolve(package, version) {
+                    Ok(Some(candidate)) => {
+                        let label = format_option_label(&candidate);
+                        let mut f = found.lock().unwrap();
+                        f.push(InstallOption {
+                            plugin_name: plugin.name().to_string(),
+                            candidate,
+                            label,
+                        });
                     }
-                );
-                found.push((plugin.name().to_string(), label, candidate.version));
-            }
-            Ok(None) => {}
-            Err(e) => {
-                tracing::debug!(
-                    "Plugin '{}' could not resolve '{}': {}",
-                    plugin.name(),
-                    package,
-                    e
-                );
+                    Ok(None) => {}
+                    Err(e) => {
+                        tracing::debug!(
+                            "Plugin '{}' could not resolve '{}': {}",
+                            plugin.name(),
+                            package,
+                            e
+                        );
+                    }
+                }
+
+                // For AUR: also check -bin, -appimage, -prebuilt variants
+                if plugin.name() == "aur" {
+                    for suffix in &["-bin", "-appimage", "-prebuilt"] {
+                        let variant_name = format!("{}{}", package, suffix);
+                        match plugin.resolve(&variant_name, None) {
+                            Ok(Some(candidate)) => {
+                                let label = format_option_label(&candidate);
+                                let mut f = found.lock().unwrap();
+                                f.push(InstallOption {
+                                    plugin_name: plugin.name().to_string(),
+                                    candidate,
+                                    label,
+                                });
+                            }
+                            Ok(None) => {}
+                            Err(_) => {}
+                        }
+                    }
+                }
+            }));
+        }
+
+        for handle in handles {
+            if handle.join().is_err() {
+                tracing::warn!("A source discovery thread panicked");
             }
         }
-    }
+    });
+
+    let mut found = found.into_inner().unwrap_or_default();
+
+    // Sort: exact name matches first, then by plugin priority order
+    let plugin_order: std::collections::HashMap<&str, usize> = plugins
+        .iter()
+        .enumerate()
+        .map(|(i, p)| (p.name(), i))
+        .collect();
+
+    found.sort_by(|a, b| {
+        let a_exact = a.candidate.name == package;
+        let b_exact = b.candidate.name == package;
+        // Exact name matches first
+        b_exact
+            .cmp(&a_exact)
+            // Then by plugin priority
+            .then_with(|| {
+                let a_prio = plugin_order.get(a.plugin_name.as_str()).unwrap_or(&99);
+                let b_prio = plugin_order.get(b.plugin_name.as_str()).unwrap_or(&99);
+                a_prio.cmp(b_prio)
+            })
+    });
 
     match found.len() {
         0 => Err(ZlError::PackageNotFound {
             name: package.to_string(),
         }),
         1 => {
-            let (source, label, _) = &found[0];
-            println!("Found: {}", label);
-            Ok(source.clone())
+            let opt = &found[0];
+            println!("Found: {}", opt.label);
+            Ok(opt.plugin_name.clone())
         }
         _ if auto_yes => {
-            // Non-interactive: pick first (highest-priority plugin)
-            let (source, label, _) = &found[0];
-            println!("Auto-selected: {}", label);
-            Ok(source.clone())
+            // Non-interactive: pick first (highest-priority, exact-name match)
+            let opt = &found[0];
+            println!("Auto-selected: {}", opt.label);
+            Ok(opt.plugin_name.clone())
         }
         _ => {
-            let items: Vec<&str> = found.iter().map(|(_, label, _)| label.as_str()).collect();
+            // Show all options with clear labeling
+            println!();
+            println!("  Found '{}' in {} options:", package, found.len());
+            println!();
 
-            let selection = dialoguer::Select::with_theme(
-                &dialoguer::theme::ColorfulTheme::default(),
-            )
-            .with_prompt(format!(
-                "Found '{}' in {} sources. Select one",
-                package,
-                found.len()
-            ))
-            .items(&items)
-            .default(0)
-            .interact()
-            .map_err(|e| ZlError::Plugin {
-                plugin: "interactive".into(),
-                message: format!("Selection cancelled: {}", e),
-            })?;
+            let items: Vec<String> = found.iter().map(|o| o.label.clone()).collect();
+            let item_refs: Vec<&str> = items.iter().map(|s| s.as_str()).collect();
 
-            Ok(found[selection].0.clone())
+            let selection =
+                dialoguer::Select::with_theme(&dialoguer::theme::ColorfulTheme::default())
+                    .with_prompt("Select package to install")
+                    .items(&item_refs)
+                    .default(0)
+                    .interact()
+                    .map_err(|e| ZlError::Plugin {
+                        plugin: "interactive".into(),
+                        message: format!("Selection cancelled: {}", e),
+                    })?;
+
+            Ok(found[selection].plugin_name.clone())
         }
     }
+}
+
+/// Format a human-readable label for an install option.
+fn format_option_label(candidate: &PackageCandidate) -> String {
+    let type_tag = if candidate.name.ends_with("-bin")
+        || candidate.name.ends_with("-appimage")
+        || candidate.name.ends_with("-prebuilt")
+    {
+        " [binary]"
+    } else if candidate.source == "aur" {
+        " [source]"
+    } else if candidate.source == "github" {
+        " [release]"
+    } else {
+        ""
+    };
+
+    let desc = if candidate.description.is_empty() {
+        String::new()
+    } else {
+        let clean: String = candidate
+            .description
+            .trim_start_matches("[binary] ")
+            .chars()
+            .take(50)
+            .collect();
+        format!(" - {}", clean)
+    };
+
+    format!(
+        "{} {}  [{}]{}{}",
+        candidate.name, candidate.version, candidate.source, type_tag, desc
+    )
 }
 
 fn is_executable(path: &Path) -> bool {

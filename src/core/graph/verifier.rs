@@ -109,6 +109,7 @@ pub fn format_report(verification: &PackageVerification) -> String {
 }
 
 /// Verify and return an error if anything is broken
+#[allow(dead_code)]
 pub fn verify_or_fail(
     package_dir: &Path,
     package_name: &str,

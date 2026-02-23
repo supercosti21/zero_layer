@@ -8,14 +8,17 @@ use crate::error::{ZlError, ZlResult};
 #[derive(Debug)]
 pub struct VerifyResult {
     /// SHA256 checksum matched
+    #[allow(dead_code)]
     pub checksum_ok: bool,
     /// GPG signature verification result (None if no signature available)
+    #[allow(dead_code)]
     pub gpg_ok: Option<bool>,
     /// Human-readable verification message
     pub message: String,
 }
 
 impl VerifyResult {
+    #[allow(dead_code)]
     pub fn passed(&self) -> bool {
         self.checksum_ok && self.gpg_ok.unwrap_or(true)
     }

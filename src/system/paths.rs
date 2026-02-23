@@ -116,12 +116,11 @@ pub fn detect_multiarch_tuple() -> Option<String> {
     if let Ok(output) = std::process::Command::new("dpkg-architecture")
         .arg("-qDEB_HOST_MULTIARCH")
         .output()
+        && output.status.success()
     {
-        if output.status.success() {
-            let tuple = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !tuple.is_empty() && Path::new(&format!("/usr/lib/{}", tuple)).is_dir() {
-                return Some(tuple);
-            }
+        let tuple = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !tuple.is_empty() && Path::new(&format!("/usr/lib/{}", tuple)).is_dir() {
+            return Some(tuple);
         }
     }
 
@@ -314,7 +313,7 @@ mod tests {
 
     #[test]
     fn test_discover_lib_dirs_not_empty() {
-        let dirs = discover_lib_dirs(&SystemLayout::FHS);
+        let dirs = discover_lib_dirs(&SystemLayout::Fhs);
         assert!(
             !dirs.is_empty(),
             "Should find at least some lib directories"

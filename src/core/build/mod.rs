@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 pub mod systems;
 
 use std::path::{Path, PathBuf};

@@ -45,8 +45,8 @@ pub struct AptPlugin {
     db: RwLock<Vec<AptEntry>>,
 }
 
-impl AptPlugin {
-    pub fn new() -> Self {
+impl Default for AptPlugin {
+    fn default() -> Self {
         Self {
             mirror: DEFAULT_MIRROR.to_string(),
             suite: DEFAULT_SUITE.to_string(),
@@ -55,6 +55,12 @@ impl AptPlugin {
             cache_dir: PathBuf::new(),
             db: RwLock::new(Vec::new()),
         }
+    }
+}
+
+impl AptPlugin {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     fn entry_to_candidate(&self, entry: &AptEntry) -> PackageCandidate {
@@ -117,11 +123,11 @@ impl AptPlugin {
                     message: format!("HTTP {}", resp.status()),
                 });
             }
-            Ok(resp.bytes().map_err(|e| ZlError::DownloadFailed {
+            resp.bytes().map_err(|e| ZlError::DownloadFailed {
                 url: url.clone(),
                 attempts: attempt,
                 message: e.to_string(),
-            })?)
+            })
         })?;
 
         std::fs::write(&cache_path, &bytes)?;
@@ -142,10 +148,10 @@ impl AptPlugin {
         let mut all = Vec::new();
         for component in &self.components {
             let path = self.packages_cache_path(component);
-            if let Ok(bytes) = std::fs::read(&path) {
-                if let Ok(content) = decompress_gz(&bytes) {
-                    all.extend(index::parse(&content));
-                }
+            if let Ok(bytes) = std::fs::read(&path)
+                && let Ok(content) = decompress_gz(&bytes)
+            {
+                all.extend(index::parse(&content));
             }
         }
         all
@@ -208,7 +214,9 @@ impl SourcePlugin for AptPlugin {
         let q = query.to_lowercase();
         Ok(db
             .iter()
-            .filter(|e| e.name.to_lowercase().contains(&q) || e.description.to_lowercase().contains(&q))
+            .filter(|e| {
+                e.name.to_lowercase().contains(&q) || e.description.to_lowercase().contains(&q)
+            })
             .map(|e| self.entry_to_candidate(e))
             .collect())
     }
@@ -217,9 +225,7 @@ impl SourcePlugin for AptPlugin {
         let db = self.db.read().unwrap();
         Ok(db
             .iter()
-            .find(|e| {
-                e.name == name && version.map_or(true, |v| e.version == v)
-            })
+            .find(|e| e.name == name && version.is_none_or(|v| e.version == v))
             .map(|e| self.entry_to_candidate(e)))
     }
 

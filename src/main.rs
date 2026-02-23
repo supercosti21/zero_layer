@@ -31,10 +31,10 @@ fn main() {
 
     if let Err(e) = run(cli_args) {
         eprintln!("error: {}", e);
-        if let Some(zl_err) = e.downcast_ref::<error::ZlError>() {
-            if let Some(hint) = zl_err.suggestion() {
-                eprintln!("  hint: {}", hint);
-            }
+        if let Some(zl_err) = e.downcast_ref::<error::ZlError>()
+            && let Some(hint) = zl_err.suggestion()
+        {
+            eprintln!("  hint: {}", hint);
         }
         std::process::exit(1);
     }
@@ -95,87 +95,34 @@ fn run(cli_args: cli::Cli) -> anyhow::Result<()> {
     github.init(&config.plugin_config("github"))?;
     registry.register(Box::new(github));
 
-    let auto_yes = cli_args.global.yes || config.general.auto_confirm;
-    let dry_run = cli_args.global.dry_run;
-    let skip_verify = cli_args.global.skip_verify;
+    let ctx = cli::AppContext {
+        paths: &zl_paths,
+        db: &db,
+        registry: &registry,
+        profile: &profile,
+        auto_yes: cli_args.global.yes || config.general.auto_confirm,
+        dry_run: cli_args.global.dry_run,
+        skip_verify: cli_args.global.skip_verify,
+    };
 
     // Dispatch commands
     match cli_args.command {
-        cli::Commands::Install(args) => {
-            cli::install::handle(
-                args,
-                &zl_paths,
-                &db,
-                &registry,
-                &profile,
-                auto_yes,
-                dry_run,
-                skip_verify,
-            )?;
-        }
-        cli::Commands::Remove(args) => {
-            cli::remove::handle(args, &zl_paths, &db, auto_yes, dry_run)?;
-        }
-        cli::Commands::Search(args) => {
-            cli::search::handle(args, &registry)?;
-        }
-        cli::Commands::Update(args) => {
-            cli::update::handle(
-                args,
-                &zl_paths,
-                &db,
-                &registry,
-                &profile,
-                auto_yes,
-                dry_run,
-                skip_verify,
-            )?;
-        }
-        cli::Commands::Upgrade(args) => {
-            cli::upgrade::handle(
-                args,
-                &zl_paths,
-                &db,
-                &registry,
-                &profile,
-                auto_yes,
-                dry_run,
-                skip_verify,
-            )?;
-        }
-        cli::Commands::List(args) => {
-            cli::list::handle(args, &db)?;
-        }
-        cli::Commands::Info(args) => {
-            cli::info::handle(args, &db)?;
-        }
-        cli::Commands::Cache(cmd) => {
-            cli::cache::handle(cmd, &zl_paths)?;
-        }
-        cli::Commands::Completions(_) => {
-            unreachable!("handled above");
-        }
-        cli::Commands::Pin(args) => {
-            cli::pin::handle_pin(args, &db)?;
-        }
-        cli::Commands::Unpin(args) => {
-            cli::pin::handle_unpin(args, &db)?;
-        }
-        cli::Commands::Export(args) => {
-            cli::lockfile::handle_export(args, &db)?;
-        }
-        cli::Commands::Import(args) => {
-            cli::lockfile::handle_import(args, &db)?;
-        }
-        cli::Commands::Switch(args) => {
-            cli::install::handle_switch(args, &zl_paths, &db)?;
-        }
-        cli::Commands::SelfUpdate => {
-            unreachable!("handled above");
-        }
-        cli::Commands::Env(cmd) => {
-            cli::env::handle(cmd, &zl_paths, &config, &profile)?;
-        }
+        cli::Commands::Install(args) => cli::install::handle(args, &ctx)?,
+        cli::Commands::Remove(args) => cli::remove::handle(args, &ctx)?,
+        cli::Commands::Search(args) => cli::search::handle(args, ctx.registry)?,
+        cli::Commands::Update(args) => cli::update::handle(args, &ctx)?,
+        cli::Commands::Upgrade(args) => cli::upgrade::handle(args, &ctx)?,
+        cli::Commands::List(args) => cli::list::handle(args, ctx.db)?,
+        cli::Commands::Info(args) => cli::info::handle(args, ctx.db)?,
+        cli::Commands::Cache(cmd) => cli::cache::handle(cmd, ctx.paths)?,
+        cli::Commands::Completions(_) => unreachable!("handled above"),
+        cli::Commands::Pin(args) => cli::pin::handle_pin(args, ctx.db)?,
+        cli::Commands::Unpin(args) => cli::pin::handle_unpin(args, ctx.db)?,
+        cli::Commands::Export(args) => cli::lockfile::handle_export(args, ctx.db)?,
+        cli::Commands::Import(args) => cli::lockfile::handle_import(args, ctx.db)?,
+        cli::Commands::Switch(args) => cli::install::handle_switch(args, ctx.paths, ctx.db)?,
+        cli::Commands::SelfUpdate => unreachable!("handled above"),
+        cli::Commands::Env(cmd) => cli::env::handle(cmd, ctx.paths, &config, ctx.profile)?,
     }
 
     Ok(())

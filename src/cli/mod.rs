@@ -13,8 +13,32 @@ pub mod selfupdate;
 pub mod update;
 pub mod upgrade;
 
-use clap::{ArgAction, Args, Parser, Subcommand};
+use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
+
+use crate::core::db::ops::ZlDatabase;
+use crate::paths::ZlPaths;
+use crate::plugin::PluginRegistry;
+use crate::system::SystemProfile;
+
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+pub enum SortOrder {
+    #[default]
+    Relevance,
+    Name,
+    Version,
+}
+
+/// Shared application context passed to all command handlers.
+pub struct AppContext<'a> {
+    pub paths: &'a ZlPaths,
+    pub db: &'a ZlDatabase,
+    pub registry: &'a PluginRegistry,
+    pub profile: &'a SystemProfile,
+    pub auto_yes: bool,
+    pub dry_run: bool,
+    pub skip_verify: bool,
+}
 
 #[derive(Parser)]
 #[command(
@@ -141,6 +165,12 @@ pub struct SearchArgs {
     /// Maximum results per source (default: 20)
     #[arg(long)]
     pub limit: Option<usize>,
+    /// Sort results: relevance (default), name, version
+    #[arg(long, default_value = "relevance")]
+    pub sort: SortOrder,
+    /// Only show exact name matches
+    #[arg(long)]
+    pub exact: bool,
 }
 
 #[derive(Args)]

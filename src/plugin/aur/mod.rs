@@ -3,6 +3,9 @@
 //! Searches the AUR via its JSON RPC API v5, then builds packages locally
 //! using `git` + `makepkg` (requires `base-devel` group installed).
 //!
+//! When searching, also discovers `-bin` variants (precompiled binaries)
+//! so users can choose between building from source or using a binary.
+//!
 //! Usage:  zl install yay --from aur
 //!         zl search rofi-wayland --from aur
 
@@ -14,6 +17,9 @@ use crate::plugin::{ExtractedPackage, PackageCandidate, SourcePlugin};
 
 const AUR_RPC: &str = "https://aur.archlinux.org/rpc/v5";
 const AUR_GIT: &str = "https://aur.archlinux.org";
+
+/// Common suffixes for AUR binary/precompiled variants
+const BIN_SUFFIXES: &[&str] = &["-bin", "-appimage", "-prebuilt"];
 
 // ── AUR RPC response types ────────────────────────────────────────────────────
 
@@ -47,8 +53,8 @@ pub struct AurPlugin {
     client: reqwest::blocking::Client,
 }
 
-impl AurPlugin {
-    pub fn new() -> Self {
+impl Default for AurPlugin {
+    fn default() -> Self {
         Self {
             cache_dir: PathBuf::new(),
             client: reqwest::blocking::Client::builder()
@@ -57,12 +63,26 @@ impl AurPlugin {
                 .unwrap_or_default(),
         }
     }
+}
+
+impl AurPlugin {
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     fn to_candidate(pkg: &AurPackage) -> PackageCandidate {
+        // Tag binary variants in the description so the user can tell them apart
+        let is_bin_variant = BIN_SUFFIXES.iter().any(|s| pkg.name.ends_with(s));
+        let description = if is_bin_variant {
+            format!("[binary] {}", pkg.description.clone().unwrap_or_default())
+        } else {
+            pkg.description.clone().unwrap_or_default()
+        };
+
         PackageCandidate {
             name: pkg.name.clone(),
             version: pkg.version.clone(),
-            description: pkg.description.clone().unwrap_or_default(),
+            description,
             arch: "any".to_string(), // set correctly after build by .PKGINFO
             source: "aur".to_string(),
             dependencies: pkg.depends.clone(),
@@ -80,7 +100,11 @@ impl AurPlugin {
             .client
             .get(url)
             .timeout(std::time::Duration::from_secs(30))
-            .send()?;
+            .send()
+            .map_err(|e| ZlError::Plugin {
+                plugin: "aur".into(),
+                message: format!("AUR RPC request failed: {}", e),
+            })?;
 
         if !resp.status().is_success() {
             return Err(ZlError::Plugin {
@@ -93,6 +117,25 @@ impl AurPlugin {
             plugin: "aur".into(),
             message: format!("Failed to parse AUR response: {}", e),
         })
+    }
+
+    /// Fetch info for specific package names via the AUR multiinfo endpoint.
+    /// Returns candidates for all names that exist on AUR.
+    fn fetch_info_multi(&self, names: &[String]) -> ZlResult<Vec<PackageCandidate>> {
+        if names.is_empty() {
+            return Ok(vec![]);
+        }
+        // AUR RPC v5 info endpoint accepts multiple args: /info/{name1},{name2},...
+        // But the standard way is multiple &arg[]= params
+        let mut url = format!("{}/info?", AUR_RPC);
+        for (i, name) in names.iter().enumerate() {
+            if i > 0 {
+                url.push('&');
+            }
+            url.push_str(&format!("arg[]={}", name));
+        }
+        let resp = self.fetch_rpc(&url)?;
+        Ok(resp.results.iter().map(Self::to_candidate).collect())
     }
 }
 
@@ -117,7 +160,31 @@ impl SourcePlugin for AurPlugin {
     fn search(&self, query: &str) -> ZlResult<Vec<PackageCandidate>> {
         let url = format!("{}/search/{}?by=name-desc", AUR_RPC, query);
         let resp = self.fetch_rpc(&url)?;
-        Ok(resp.results.iter().map(Self::to_candidate).collect())
+        let mut results: Vec<PackageCandidate> =
+            resp.results.iter().map(Self::to_candidate).collect();
+
+        // If query doesn't already end with a binary suffix, also look up -bin variants
+        let already_has_bin_suffix = BIN_SUFFIXES.iter().any(|s| query.ends_with(s));
+        if !already_has_bin_suffix {
+            let bin_names: Vec<String> = BIN_SUFFIXES
+                .iter()
+                .map(|s| format!("{}{}", query, s))
+                .collect();
+
+            // Only fetch variants that aren't already in the results
+            let existing_names: std::collections::HashSet<&str> =
+                results.iter().map(|r| r.name.as_str()).collect();
+            let missing: Vec<String> = bin_names
+                .into_iter()
+                .filter(|n| !existing_names.contains(n.as_str()))
+                .collect();
+
+            if let Ok(bin_results) = self.fetch_info_multi(&missing) {
+                results.extend(bin_results);
+            }
+        }
+
+        Ok(results)
     }
 
     fn resolve(&self, name: &str, version: Option<&str>) -> ZlResult<Option<PackageCandidate>> {
@@ -131,7 +198,7 @@ impl SourcePlugin for AurPlugin {
             .map(Self::to_candidate);
 
         // If a version was requested, check it matches
-        Ok(candidate.filter(|c| version.map_or(true, |v| c.version == v)))
+        Ok(candidate.filter(|c| version.is_none_or(|v| c.version == v)))
     }
 
     fn download(&self, candidate: &PackageCandidate, dest_dir: &Path) -> ZlResult<PathBuf> {
@@ -148,23 +215,28 @@ impl SourcePlugin for AurPlugin {
             candidate.download_url
         );
 
-        let clone_status = std::process::Command::new("git")
+        let clone_output = std::process::Command::new("git")
             .args(["clone", "--depth=1"])
             .arg(&candidate.download_url)
             .arg(&clone_dir)
             .env("GIT_TERMINAL_PROMPT", "0")
-            .status()?;
+            .output()?;
 
-        if !clone_status.success() {
+        if !clone_output.status.success() {
+            let stderr = String::from_utf8_lossy(&clone_output.stderr);
             return Err(ZlError::Plugin {
                 plugin: "aur".into(),
-                message: format!("git clone failed for {}", candidate.download_url),
+                message: format!(
+                    "git clone failed for {}:\n  {}",
+                    candidate.download_url,
+                    stderr.trim()
+                ),
             });
         }
 
-        tracing::info!("Building {} with makepkg…", candidate.name);
+        tracing::info!("Building {} with makepkg...", candidate.name);
 
-        let build_status = std::process::Command::new("makepkg")
+        let build_output = std::process::Command::new("makepkg")
             .args([
                 "--syncdeps", // install build deps via pacman
                 "--force",    // overwrite existing pkg file
@@ -172,12 +244,26 @@ impl SourcePlugin for AurPlugin {
                 "--noprogressbar",
             ])
             .current_dir(&clone_dir)
-            .status()?;
+            .output()?;
 
-        if !build_status.success() {
+        if !build_output.status.success() {
+            let stderr = String::from_utf8_lossy(&build_output.stderr);
+            let hint = if stderr.contains("base-devel") || stderr.contains("fakeroot") {
+                "\n  hint: install base-devel: sudo pacman -S --needed base-devel"
+            } else if stderr.contains("PGP") || stderr.contains("signature") {
+                "\n  hint: import the PGP key or use makepkg with --skippgpcheck"
+            } else if stderr.contains("dependency") {
+                "\n  hint: a build dependency could not be installed — check the PKGBUILD"
+            } else {
+                ""
+            };
             return Err(ZlError::BuildFailed {
                 package: candidate.name.clone(),
-                message: "makepkg failed — check PKGBUILD or install base-devel".into(),
+                message: format!(
+                    "makepkg failed:\n  {}{}",
+                    stderr.lines().take(5).collect::<Vec<_>>().join("\n  "),
+                    hint
+                ),
             });
         }
 
@@ -265,5 +351,36 @@ mod tests {
         assert_eq!(c.name, "yay");
         assert_eq!(c.source, "aur");
         assert!(c.download_url.contains("aur.archlinux.org"));
+    }
+
+    #[test]
+    fn test_to_candidate_bin_tagged() {
+        let pkg = AurPackage {
+            name: "yay-bin".into(),
+            package_base: "yay-bin".into(),
+            version: "12.3.5-1".into(),
+            description: Some("AUR helper (prebuilt)".into()),
+            depends: vec![],
+            conflicts: vec![],
+            provides: vec!["yay".into()],
+        };
+        let c = AurPlugin::to_candidate(&pkg);
+        assert_eq!(c.name, "yay-bin");
+        assert!(c.description.starts_with("[binary]"));
+    }
+
+    #[test]
+    fn test_to_candidate_source_not_tagged() {
+        let pkg = AurPackage {
+            name: "yay".into(),
+            package_base: "yay".into(),
+            version: "12.3.5-1".into(),
+            description: Some("AUR helper".into()),
+            depends: vec!["go".into()],
+            conflicts: vec![],
+            provides: vec![],
+        };
+        let c = AurPlugin::to_candidate(&pkg);
+        assert!(!c.description.contains("[binary]"));
     }
 }

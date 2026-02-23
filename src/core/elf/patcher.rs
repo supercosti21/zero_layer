@@ -23,21 +23,20 @@ pub fn patch_for_zl(
     let mut patcher = elb::ElfPatcher::new(elf, file);
 
     // Patch interpreter if present and needs remapping
-    if let Some(ref orig_interp) = info.interpreter {
-        if let Some(new_interp) = mapping.remap_interpreter(orig_interp) {
-            let c_interp = std::ffi::CString::new(new_interp).map_err(|e| {
-                crate::error::ZlError::ElfPatch {
-                    path: path.to_path_buf(),
-                    message: e.to_string(),
-                }
+    if let Some(ref orig_interp) = info.interpreter
+        && let Some(new_interp) = mapping.remap_interpreter(orig_interp)
+    {
+        let c_interp =
+            std::ffi::CString::new(new_interp).map_err(|e| crate::error::ZlError::ElfPatch {
+                path: path.to_path_buf(),
+                message: e.to_string(),
             })?;
-            patcher
-                .set_interpreter(&c_interp)
-                .map_err(|e| crate::error::ZlError::ElfPatch {
-                    path: path.to_path_buf(),
-                    message: e.to_string(),
-                })?;
-        }
+        patcher
+            .set_interpreter(&c_interp)
+            .map_err(|e| crate::error::ZlError::ElfPatch {
+                path: path.to_path_buf(),
+                message: e.to_string(),
+            })?;
     }
 
     // Build and set RUNPATH so needed libs resolve correctly
@@ -66,6 +65,7 @@ pub fn patch_for_zl(
 }
 
 /// Set only the interpreter of an ELF binary
+#[allow(dead_code)]
 pub fn set_interpreter(path: &Path, new_interp: &str, page_size: u64) -> ZlResult<()> {
     use std::fs::OpenOptions;
 
@@ -99,6 +99,7 @@ pub fn set_interpreter(path: &Path, new_interp: &str, page_size: u64) -> ZlResul
 }
 
 /// Set only the RUNPATH of an ELF binary
+#[allow(dead_code)]
 pub fn set_runpath(path: &Path, new_runpath: &str, page_size: u64) -> ZlResult<()> {
     use elb::DynamicTag;
     use std::fs::OpenOptions;

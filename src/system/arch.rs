@@ -36,11 +36,11 @@ impl Arch {
     /// Uses `std::env::consts::ARCH` (compile-time) as primary, which is always correct
     /// for the running binary. Falls back to parsing uname-style strings.
     pub fn detect() -> Self {
-        Self::from_str(std::env::consts::ARCH)
+        Self::parse(std::env::consts::ARCH)
     }
 
     /// Parse an architecture string (as returned by `uname -m` or similar).
-    pub fn from_str(s: &str) -> Self {
+    pub fn parse(s: &str) -> Self {
         match s {
             "x86_64" | "amd64" => Arch::X86_64,
             "aarch64" | "arm64" => Arch::Aarch64,
@@ -68,6 +68,7 @@ impl Arch {
     }
 
     /// The Pacman repo name for this architecture.
+    #[allow(dead_code)]
     pub fn pacman_name(&self) -> &str {
         match self {
             Arch::X86_64 => "x86_64",
@@ -92,14 +93,14 @@ mod tests {
 
     #[test]
     fn test_arch_from_str() {
-        assert_eq!(Arch::from_str("x86_64"), Arch::X86_64);
-        assert_eq!(Arch::from_str("amd64"), Arch::X86_64);
-        assert_eq!(Arch::from_str("aarch64"), Arch::Aarch64);
-        assert_eq!(Arch::from_str("arm64"), Arch::Aarch64);
-        assert_eq!(Arch::from_str("armv7l"), Arch::Armv7);
-        assert_eq!(Arch::from_str("riscv64"), Arch::Riscv64);
-        assert_eq!(Arch::from_str("i686"), Arch::I686);
-        assert_eq!(Arch::from_str("s390x"), Arch::S390x);
+        assert_eq!(Arch::parse("x86_64"), Arch::X86_64);
+        assert_eq!(Arch::parse("amd64"), Arch::X86_64);
+        assert_eq!(Arch::parse("aarch64"), Arch::Aarch64);
+        assert_eq!(Arch::parse("arm64"), Arch::Aarch64);
+        assert_eq!(Arch::parse("armv7l"), Arch::Armv7);
+        assert_eq!(Arch::parse("riscv64"), Arch::Riscv64);
+        assert_eq!(Arch::parse("i686"), Arch::I686);
+        assert_eq!(Arch::parse("s390x"), Arch::S390x);
     }
 
     #[test]

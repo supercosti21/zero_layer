@@ -99,6 +99,7 @@ pub fn resolve_with_deps(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn resolve_recursive(
     candidate: &PackageCandidate,
     explicit: bool,

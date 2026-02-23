@@ -7,35 +7,15 @@ pub enum ZlError {
     #[error("ELF analysis failed for {path}: {source}")]
     ElfAnalysis {
         path: PathBuf,
-        source: goblin::error::Error,
+        source: Box<goblin::error::Error>,
     },
 
     #[error("ELF patching failed for {path}: {message}")]
     ElfPatch { path: PathBuf, message: String },
 
-    // ── Path remapping ──
-    #[error("Path remapping failed: {0}")]
-    PathRemap(String),
-
     // ── Package resolution ──
     #[error("Package not found: {name}\n  hint: try `zl search {name}` to find available packages")]
     PackageNotFound { name: String },
-
-    #[error("Package already installed: {name}-{version}")]
-    AlreadyInstalled { name: String, version: String },
-
-    // ── Dependencies ──
-    #[error("Dependency resolution failed for {package}: {message}")]
-    DependencyResolution { package: String, message: String },
-
-    #[error("Unresolvable dependencies for {package}:\n{}", format_missing_deps(.missing))]
-    UnresolvableDeps {
-        package: String,
-        missing: Vec<String>,
-    },
-
-    #[error("Dependency cycle detected: {}", .chain.join(" → "))]
-    DependencyCycle { chain: Vec<String> },
 
     #[error("Conflict: {installed} conflicts with {requested}")]
     PackageConflict {
@@ -43,20 +23,7 @@ pub enum ZlError {
         requested: String,
     },
 
-    // ── Database ──
-    #[error("Database error: {source}")]
-    Database {
-        #[from]
-        source: redb::Error,
-    },
-
     // ── Network ──
-    #[error("Network error: {source}")]
-    Network {
-        #[from]
-        source: reqwest::Error,
-    },
-
     #[error("Download failed for {url} after {attempts} attempts: {message}")]
     DownloadFailed {
         url: String,
@@ -96,10 +63,6 @@ pub enum ZlError {
         source: std::io::Error,
     },
 
-    // ── Verification ──
-    #[error("Verification failed:\n{0}")]
-    Verification(String),
-
     // ── Serialization ──
     #[error("Serialization error: {source}")]
     Serialization {
@@ -113,25 +76,27 @@ pub enum ZlError {
 
     // ── GPG/Signature ──
     #[error("GPG signature verification failed for {path}: {message}")]
-    GpgVerification {
-        path: std::path::PathBuf,
-        message: String,
-    },
+    GpgVerification { path: PathBuf, message: String },
 
     // ── Self-update ──
     #[error("Self-update failed: {0}")]
     SelfUpdate(String),
 
+    // ── Verification ──
+    #[allow(dead_code)]
+    #[error("Verification failed:\n{0}")]
+    Verification(String),
+
+    // ── Architecture ──
+    #[allow(dead_code)]
+    #[error(
+        "Architecture mismatch: package is built for {pkg_arch} but your system is {host_arch}"
+    )]
+    ArchMismatch { pkg_arch: String, host_arch: String },
+
     // ── Environments ──
     #[error("Environment error: {0}")]
     Environment(String),
-}
-
-fn format_missing_deps(deps: &[String]) -> String {
-    deps.iter()
-        .map(|d| format!("  - {}", d))
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 impl ZlError {
@@ -141,8 +106,20 @@ impl ZlError {
             ZlError::PackageNotFound { .. } => {
                 Some("Check the package name or try a different source with --from")
             }
-            ZlError::UnresolvableDeps { .. } => {
-                Some("Try installing the missing dependencies manually first")
+            ZlError::DownloadFailed { url, .. } if url.contains("archlinux.org") => Some(
+                "Mirror sync failed. Check /etc/pacman.d/mirrorlist or your internet connection",
+            ),
+            ZlError::DownloadFailed { url, .. }
+                if url.contains("debian.org") || url.contains("ubuntu.com") =>
+            {
+                Some("Failed to fetch from APT repo. Check the repository URL in your config")
+            }
+            ZlError::DownloadFailed { url, .. }
+                if url.contains("github.com") || url.contains("api.github.com") =>
+            {
+                Some(
+                    "GitHub download failed. You may be rate-limited — set GITHUB_TOKEN env var or wait",
+                )
             }
             ZlError::DownloadFailed { .. } => {
                 Some("Check your internet connection or try again later")
@@ -151,22 +128,67 @@ impl ZlError {
                 Some("The server may be slow — try again or use a different mirror")
             }
             ZlError::ChecksumMismatch { .. } => {
-                Some("The downloaded file is corrupted — delete the cache and try again")
+                Some("The downloaded file is corrupted — run `zl cache clean` and try again")
+            }
+            ZlError::BuildToolMissing { tool } if tool == "git" => {
+                Some("Install git: sudo pacman -S git (Arch) or sudo apt install git (Debian)")
+            }
+            ZlError::BuildToolMissing { tool } if tool == "makepkg" => {
+                Some("makepkg is part of pacman. On non-Arch systems, AUR builds are not supported")
             }
             ZlError::BuildToolMissing { .. } => {
                 Some("Install the required build tool with your system package manager")
             }
-            ZlError::DependencyCycle { .. } => Some("This is a packaging bug — report it upstream"),
+            ZlError::BuildFailed { message, .. }
+                if message.contains("base-devel") || message.contains("fakeroot") =>
+            {
+                Some("Install base-devel: sudo pacman -S --needed base-devel")
+            }
+            ZlError::BuildFailed { message, .. }
+                if message.contains("PGP") || message.contains("signature") =>
+            {
+                Some("A PGP key is missing. Import it or rebuild with --skippgpcheck")
+            }
+            ZlError::BuildFailed { .. } => {
+                Some("Check the PKGBUILD for errors or missing build dependencies")
+            }
             ZlError::PackageConflict { .. } => {
                 Some("Remove the conflicting package first with `zl remove`")
             }
+            ZlError::Plugin { plugin, message } if plugin == "aur" && message.contains("HTTP") => {
+                Some(
+                    "AUR API returned an error. The package name may be incorrect or AUR may be down",
+                )
+            }
+            ZlError::Plugin { plugin, message }
+                if plugin == "github" && message.contains("rate") =>
+            {
+                Some(
+                    "GitHub API rate limit reached. Set GITHUB_TOKEN env var to increase the limit",
+                )
+            }
+            ZlError::Plugin { plugin, .. } if plugin == "github" => Some(
+                "GitHub packages require owner/repo format (e.g., `zl install BurntSushi/ripgrep --from github`)",
+            ),
+            ZlError::Plugin { .. } => None,
             ZlError::GpgVerification { .. } => Some(
                 "The package signature is invalid — this may indicate tampering. Use --skip-verify to bypass (not recommended)",
             ),
-            ZlError::SelfUpdate(msg) if msg.contains("Permission denied") => {
+            ZlError::ArchMismatch { .. } => Some(
+                "This package was built for a different CPU architecture and cannot run on your system",
+            ),
+            ZlError::SelfUpdate(msg)
+                if msg.contains("Permission denied") || msg.contains("not writable") =>
+            {
                 Some("Run with elevated permissions: sudo zl self-update")
             }
+            ZlError::SelfUpdate(msg) if msg.contains("No binary found") => Some(
+                "No prebuilt binary for your architecture. Build from source: cargo install --git https://github.com/supercosti21/zero_layer",
+            ),
             ZlError::SelfUpdate(_) => Some("Check your internet connection and try again"),
+            ZlError::Archive(_) => {
+                Some("The archive may be corrupted. Run `zl cache clean` and try again")
+            }
             _ => None,
         }
     }

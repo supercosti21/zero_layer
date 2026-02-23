@@ -4,285 +4,166 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Rules
 
-- **Every time you make changes to the codebase**, update this CLAUDE.md file to reflect the new state (implementation status, module structure, known issues, etc.).
-- **If changes affect user-facing features, architecture, or usage**, also update README.md accordingly.
+These rules are **mandatory** for every Claude instance working on this repo.
+
+### Git workflow
+
+1. **Feature branches** — NEVER work directly on `main`. Always create a branch first.
+2. **Branch naming** — Use prefixed names: `feat/xxx`, `fix/xxx`, `chore/xxx`, `refactor/xxx`, `docs/xxx`.
+3. **Merge** — Only merge to `main` when everything works (tests pass, clippy clean, fmt clean). Delete the branch after merge.
+6. **Atomic commits** — 1 commit = 1 concept. Better 3 small focused commits than 1 giant commit. Each commit should be self-contained and pass CI on its own.
+7. **Commit message format** — `type: clear title` where type is `feat`, `fix`, `chore`, `refactor`, or `docs`. Add bullet points in the body for details when needed.
+8. **Documentation** — After every significant change, update `CLAUDE.md` first (implementation state, module structure, test count), then `README.md` if user-facing features changed.
 
 ## Project Overview
 
-**Zero Layer (ZL)** is a universal Linux package manager with native binary translation, written in Rust. It installs packages from any source (pacman, apt, rpm, AppImage, GitHub releases, pip, npm, cargo, etc.) on any Linux system by translating them natively — no containers, VMs, or isolation layers. After installation, translated packages are indistinguishable from native ones. Zero runtime overhead: all translation happens at install time.
+**Zero Layer (ZL)** is a universal Linux package manager with native binary translation, written in Rust. It installs packages from any source (pacman, apt, AUR, GitHub releases) on any Linux system by translating them natively — no containers, VMs, or isolation layers. All translation happens at install time; installed packages run with zero overhead.
 
 **Binary name**: `zl`
+**Rust edition**: 2024 (requires Rust 1.85+)
 **License**: GPL v3
 
 ## Build Commands
 
 ```bash
-cargo build              # Build the project
-cargo run -- <subcommand> # Run (e.g., cargo run -- install firefox)
-cargo test               # Run all tests
-cargo test <name>        # Run a single test by name
-cargo clippy             # Lint with clippy
-cargo fmt                # Format code
-cargo fmt -- --check     # Check formatting without modifying files
+cargo build                  # Debug build
+cargo build --release        # Release build
+cargo run -- <subcommand>    # Run (e.g., cargo run -- install firefox)
+cargo test                   # Run all tests (195 tests: 103 bin + 92 lib)
+cargo test <name>            # Run a single test by name
+cargo test -- --nocapture    # Run tests with stdout visible
+cargo clippy                 # Lint
+cargo fmt                    # Format
+cargo fmt -- --check         # Check formatting without modifying
 ```
+
+There are no integration tests — all tests are unit tests inside `#[cfg(test)]` modules within source files.
+
+**CI**: GitHub Actions workflow (`.github/workflows/ci.yml`) runs `cargo fmt --check`, `cargo clippy -- -D warnings`, and `cargo test` on every push to `main` and all PRs.
 
 ## Architecture
 
-### How it works (install flow)
-1. **Detect system** — auto-detect arch, interpreter, libc, lib dirs, layout (SystemProfile)
-2. **Resolve** — recursive dependency resolution with cycle detection
-3. **Check conflicts** — file ownership, binary/library name, version constraints, declared conflicts
-4. **Download** packages in parallel (up to 4 threads) with progress bars and retry
-5. **Verify** — SHA256 checksum + GPG signature verification (best-effort)
-6. **Extract** and analyze all ELF binaries with `goblin`
-7. **Patch** binaries with `elb` (interpreter, RUNPATH) using detected page size
-8. **Remap** FHS paths to target system structure using dynamic prefix map
-9. **Install** with atomic transaction — rollback on any failure
-10. **Track** every file in a dependency graph and persistent database
-11. **Verify** everything resolves correctly post-install (using detected lib dirs)
+### Install flow (the core operation)
 
-### Module structure
-```
-src/
-  main.rs              # Entry point: CLI parsing + SystemProfile detection + dispatch
-  lib.rs               # Re-exports core public API
-  error.rs             # ZlError enum (thiserror), ZlResult type alias, retry_with_backoff()
-  config.rs            # Config parsing (~/.config/zl/config.toml), SystemConfig for overrides
-  paths.rs             # ZL directory layout (~/.local/share/zl/)
-  system/
-    mod.rs             # SystemProfile struct — auto-detected host system profile
-    arch.rs            # CPU architecture detection (x86_64, aarch64, armv7, riscv64, etc.)
-    interpreter.rs     # Dynamic linker detection (reads PT_INTERP from /bin/sh via goblin)
-    libc.rs            # C library detection (glibc/musl/bionic from interpreter name)
-    paths.rs           # Host lib/bin path discovery (ldconfig, ld.so.conf, multiarch, NixOS)
-    detect.rs          # System layout detection (FHS, MergedUsr, NixOS, Guix, Termux, GoboLinux)
-  cli/
-    mod.rs             # Cli struct (clap derive), Commands enum, all arg structs
-    deps.rs            # Dependency resolution: recursive resolve, install plan, cycle detection
-    install.rs         # Install: conflict check, parallel download, verification, transaction-wrapped install, multi-version support
-    remove.rs          # Remove: delete files, symlinks, deps, DB entries, cascade orphans, version-specific removal
-    search.rs          # Search subcommand handler
-    update.rs          # Update: check newer versions, skip pinned, remove old + install new
-    upgrade.rs         # Upgrade: mass upgrade all packages with summary + confirmation
-    list.rs            # List: --explicit, --deps, --orphans filters
-    info.rs            # Detailed package info: deps, reverse deps, disk usage, pin status
-    cache.rs           # Cache management: list files + sizes, clean all cached files
-    completions.rs     # Shell completions generation (bash/zsh/fish) via clap_complete
-    pin.rs             # Pin/unpin packages to prevent updates
-    lockfile.rs        # Export/import installed packages as JSON lockfile
-    selfupdate.rs      # Self-update: download + replace ZL binary from GitHub releases
-    env.rs             # Ephemeral environments: temporary/named isolated shells
-  core/
-    build/
-      mod.rs           # BuildSpec, BuildSystem enum, detect_build_system(), build_package()
-      systems.rs       # Build system implementations: autotools, cmake, meson, cargo, make
-    elf/
-      analysis.rs      # Read ELF metadata with goblin (interpreter, needed libs, rpath, soname)
-      patcher.rs       # Patch ELF with elb (set interpreter, set runpath) — uses profile.page_size
-    path/
-      mod.rs           # PathMapping struct — dynamic FHS-to-ZL path translation via SystemProfile
-      remapper.rs      # Rewrite paths in text files and shebangs
-    transaction.rs     # Atomic install transaction: tracks files/dirs/symlinks/DB, rollback on failure
-    conflicts.rs       # Conflict detection: file ownership, binary/lib name, version constraints, declared conflicts
-    verify.rs          # Package verification: SHA256 checksum + GPG signature (best-effort)
-    graph/
-      model.rs         # PackageId, PackageNode, DependencyEdge, DepGraph (petgraph)
-      resolver.rs      # Topological sort, cycle detection, orphan detection
-      verifier.rs      # Post-install verification — uses profile.lib_dirs for lib search
-    db/
-      schema.rs        # redb table definitions (PACKAGES, FILE_OWNERS, LIB_INDEX, DEPENDENCIES, PINNED)
-      ops.rs           # CRUD: packages, file ownership, lib index, dependencies, pinning, multi-version queries, plugin metadata
-  plugin/
-    mod.rs             # SourcePlugin trait, PackageCandidate, ExtractedPackage, PluginRegistry
-    pacman/
-      mod.rs           # PacmanPlugin: SourcePlugin + provides-based resolution
-      mirror.rs        # Mirror list parsing and URL construction
-      database.rs      # Sync DB download/parsing with retry (pacman desc format)
-      package.rs       # .pkg.tar.zst download with retry, extraction, .PKGINFO parsing
-    aur/
-      mod.rs           # AurPlugin: live AUR RPC v5 queries, git clone + makepkg build
-    apt/
-      mod.rs           # AptPlugin: Packages.gz sync, per-distro mirror/suite config
-      index.rs         # APT Packages index parser (RFC 2822-like format)
-      deb.rs           # .deb extraction (ar → data.tar.{gz,xz,zst,bz2}) + download
-    github/
-      mod.rs           # GithubPlugin: GitHub Releases API, smart asset selection, extract
-```
+1. **Detect system** — `SystemProfile::detect()` auto-detects arch, dynamic linker, libc, lib dirs, filesystem layout
+2. **Resolve source** — if `--from` omitted, queries ALL plugins in parallel (including AUR `-bin` variants); user picks from full list via interactive `dialoguer::Select` (`pick_source()` in `cli/install.rs`)
+3. **Resolve deps** — recursive dependency resolution with cycle detection (`cli/deps.rs`)
+4. **Check conflicts** — 5 types: file ownership, binary name, library soname, declared conflicts, version constraints (`core/conflicts.rs`)
+5. **Download** in parallel (4 threads via `thread::scope`) with progress bars and retry
+6. **Verify** — SHA256 checksum + GPG signature (best-effort)
+7. **Extract** and analyze ELF binaries with `goblin`
+8. **Arch check** — verify ELF `e_machine` matches host architecture before patching (warning on mismatch)
+9. **Patch** ELF binaries with `elb` (set interpreter, RUNPATH) using detected page size
+10. **Remap** FHS paths to ZL-managed directories (`core/path/`)
+11. **Install** atomically — `Transaction` tracks all changes; rollback on any failure
+12. **Post-install checks** — warn about missing shared libraries not found in ZL DB or system lib dirs
+13. **Track** in redb database + dependency graph
+
+### Search flow (`zl search`)
+
+1. **Parallel queries** — all plugins are queried via `thread::scope` simultaneously (not sequentially)
+2. **Relevance scoring** — each result is scored: exact name match (100), starts-with (80), contains in name (60), description-only (30)
+3. **AUR binary discovery** — if the query doesn't end with `-bin`, automatically also fetches `-bin`, `-appimage`, `-prebuilt` variants and tags them `[binary]`
+4. **Sorted output** — results sorted by relevance (default), name, or version via `--sort`
+5. **Filtering** — `--exact` shows only exact name matches; `--from` limits to a single source; `--limit` controls results per source
+
+### Removal flow (`zl remove --cascade`)
+
+1. **Preview before action** — `--cascade` always shows what will and won't be removed before prompting
+2. **Orphan detection** — only removes packages that are: (a) tracked in ZL's DB, (b) marked as implicit (`explicit: false`), (c) not depended on by any remaining package (checked via both dependency table and shared lib needs)
+3. **Shared dep protection** — dependencies used by other packages are listed as "Keeping (needed by X)" and never removed
+4. **Dry-run support** — `--dry-run` with `--cascade` shows the full removal plan without touching anything
+
+### Startup flow (`main.rs`)
+
+`main()` → parse CLI → init tracing → `run()`:
+1. Early-exit commands (`completions`, `self-update`) run without setup
+2. Load config from `~/.config/zl/config.toml`
+3. Detect `SystemProfile` and apply config overrides
+4. Create `ZlPaths`, ensure directory structure exists
+5. Open `ZlDatabase` (redb)
+6. Register all plugins: pacman → aur → apt → github (order = priority)
+7. Dispatch to command handler
 
 ### Key abstractions
-- **SystemProfile** (`system/mod.rs`): auto-detected host profile (arch, interpreter, libc, lib dirs, layout). Built once at startup, passed to all modules. Replaces all hardcoded FHS assumptions.
-- **SourcePlugin trait** (`plugin/mod.rs`): interface every package source implements (search, resolve, download, extract, sync)
-- **InstallPlan** (`cli/deps.rs`): result of recursive dependency resolution — ordered list of packages to install
-- **PathMapping** (`core/path/mod.rs`): maps FHS paths to ZL-managed paths for a specific package, using SystemProfile
-- **Transaction** (`core/transaction.rs`): atomic install transaction tracking filesystem + DB changes with rollback support
-- **ConflictReport** (`core/conflicts.rs`): pre-install conflict detection (file ownership, binary/library names, version constraints, declared conflicts)
-- **VerifyResult** (`core/verify.rs`): package integrity verification — SHA256 checksum + GPG signature
-- **BuildSpec/BuildSystem** (`core/build/mod.rs`): source build specification with auto-detection of build systems
-- **DepGraph** (`core/graph/model.rs`): petgraph-based dependency graph tracking all packages and their relationships
-- **ZlDatabase** (`core/db/ops.rs`): redb-based persistent storage for installed packages, file ownership, library index, dependency tracking, package pinning, multi-version queries
 
-### Key crates
-| Crate | Purpose |
-|-------|---------|
-| `goblin` | Read ELF metadata (interpreter, needed libs, rpath, soname) |
-| `elb` | Patch ELF binaries (set interpreter, set runpath) — pure Rust patchelf |
-| `petgraph` | Dependency graph with topological sort, cycle detection |
-| `redb` | Embedded key-value database (pure Rust, ACID, no C deps) |
-| `libc` | System detection (sysconf for page size) |
-| `clap` (derive) | CLI argument parsing |
-| `clap_complete` | Shell completions generation (bash/zsh/fish) |
-| `indicatif` | Progress bars for downloads and installs |
-| `reqwest` (blocking+json) | HTTP downloads + JSON deserialization |
-| `tar` + `zstd` + `flate2` | Archive extraction |
-| `xz2` | XZ decompression (.tar.xz, Packages.xz) |
-| `ar` | Ar archive reading (.deb format) |
-| `bzip2` | BZip2 decompression (data.tar.bz2 in old .deb) |
-| `zip` | Zip extraction (GitHub release assets) |
-| `sha2` | SHA256 checksums for package verification |
+- **`SystemProfile`** (`system/mod.rs`): Host profile (arch, interpreter, libc, lib dirs, layout). Built once, threaded through all modules. Replaces all hardcoded FHS assumptions.
+- **`SourcePlugin` trait** (`plugin/mod.rs`): Interface every package source implements — `name()`, `search()`, `resolve()`, `download()`, `extract()`, `sync()`. Plugins are compile-time modules with trait objects, not dynamic libraries.
+- **`Transaction`** (`core/transaction.rs`): Atomic install — tracks files/dirs/symlinks/DB entries created during install, rolls back everything on failure.
+- **`DepGraph`** (`core/graph/model.rs`): petgraph-based dependency graph with topological sort, cycle detection, orphan detection.
+- **`ZlDatabase`** (`core/db/ops.rs`): redb-based persistent store. Tables: PACKAGES, FILE_OWNERS, LIB_INDEX, DEPENDENCIES, PINNED, PLUGIN_METADATA.
+- **`PathMapping`** (`core/path/mod.rs`): Dynamic FHS-to-ZL path translation using SystemProfile.
+- **`PackageCandidate` / `ExtractedPackage`** (`plugin/mod.rs`): Common types shared across all plugins for package metadata and extracted content.
+
+### Plugin system
+
+All plugins implement `SourcePlugin` and are registered in `main.rs`. To add a new plugin:
+1. Create `src/plugin/<name>/mod.rs` implementing `SourcePlugin`
+2. Add `pub mod <name>;` in `src/plugin/mod.rs`
+3. Instantiate and register in `main.rs`'s `run()` function
+
+Current plugins: `pacman` (Arch repos), `aur` (AUR RPC v5 + makepkg, with `-bin` variant discovery), `apt` (Packages.gz + .deb), `github` (Releases API).
+
+### Command dispatch pattern
+
+Each CLI command lives in `src/cli/<command>.rs` with a `pub fn handle(...)` function. Most `handle` functions receive the parsed args struct plus an `AppContext` reference (defined in `cli/mod.rs`), which bundles shared state: `ZlPaths`, `ZlDatabase`, `PluginRegistry`, `SystemProfile`, and flags (`auto_yes`, `dry_run`, `skip_verify`). Commands are dispatched via a `match` in `main.rs`.
+
+### Error handling
+
+- `ZlError` enum in `error.rs` (thiserror, boxed where needed to keep size small) for domain errors with `.suggestion()` hints
+- Plugin-specific error suggestions: pacman mirror issues, APT repo failures, GitHub rate limits, AUR build failures (base-devel, PGP keys), architecture mismatches, self-update permissions
+- `anyhow::Result` at the top level (`run()` returns `anyhow::Result<()>`)
+- `retry_with_backoff()` in `error.rs` for HTTP retries (3 attempts: 1s, 2s, 4s)
+- Tracing: default level `warn`; `-v` = info, `-vv` = debug
+
+### Key design constraints
+
+- **Single binary, zero C deps**: redb over SQLite, elb over patchelf, no tokio (thread::scope for parallelism)
+- **Dynamic detection over hardcoded paths**: interpreter from /bin/sh's PT_INTERP, lib dirs from ldconfig + ld.so.conf
+- **RUNPATH over RPATH**: modern standard, respects LD_LIBRARY_PATH
+- **Atomic transactions**: every install is wrapped; failure = full rollback
 
 ### ZL directory layout (runtime)
+
 ```
 ~/.local/share/zl/
   bin/          # Symlinks to executables (user adds to PATH)
-  lib/          # Shared libraries (never duplicated)
+  lib/          # Shared libraries
   share/        # Shared data files
   etc/          # Config files
   packages/     # Per-package directories (name-version/)
   cache/        # Download cache
   envs/         # Ephemeral/named environment roots
-  zl.redb       # Package database (PACKAGES, FILE_OWNERS, LIB_INDEX, DEPENDENCIES, PINNED tables)
+  zl.redb       # Package database
 ```
 
-### Design decisions
-- **Single crate, no workspace**: plugins are compile-time modules with trait objects, not dynamic libraries
-- **Dynamic system detection over hardcoded paths**: interpreter detected from /bin/sh's PT_INTERP, lib dirs from ldconfig + ld.so.conf, layout auto-classified
-- **RUNPATH over RPATH**: modern standard, respects LD_LIBRARY_PATH
-- **redb over SQLite**: pure Rust, maintains single-binary zero-deps constraint
-- **elb over shelling out to patchelf**: pure Rust, no external dependency
-- **Parallel downloads with thread::scope**: up to 4 concurrent downloads, no tokio needed
-- **Retry with exponential backoff**: all HTTP operations retry up to 3 times (1s, 2s, 4s)
-- **Atomic transactions**: installs are wrapped in Transaction; on failure, all filesystem + DB changes are rolled back
-- **Pre-install conflict detection**: 5 types of conflicts checked before any files are written
-- **Side-by-side versions**: multiple versions of the same package can coexist, with `zl switch` to change the active one
-- **Ephemeral environments**: temporary isolated shells where packages disappear on exit
+### Key crates
 
-### SystemProfile detection chain
-1. **Architecture**: `std::env::consts::ARCH` (compile-time, always correct for running binary)
-2. **Page size**: `libc::sysconf(_SC_PAGESIZE)` (never hardcoded — 4K on x86_64, up to 64K on aarch64)
-3. **Dynamic linker**: Read PT_INTERP from `/bin/sh` using goblin. Works on ANY distro.
-4. **C library**: Derived from interpreter filename (`ld-linux-*` → glibc, `ld-musl-*` → musl)
-5. **Library paths**: Combined from `ldconfig -p`, `/etc/ld.so.conf`, `LD_LIBRARY_PATH`, layout-specific dirs
-6. **Layout**: Detected by filesystem markers (NixOS: `/nix/store`, Guix: `/gnu/store`, Termux: `$PREFIX`, merged: `/bin` → `/usr/bin`)
+| Crate | Purpose |
+|-------|---------|
+| `goblin` | Read ELF metadata (interpreter, needed libs, rpath, soname, machine type) |
+| `elb` | Patch ELF binaries (set interpreter, set runpath) |
+| `petgraph` | Dependency graph with topological sort, cycle detection |
+| `redb` | Embedded key-value database (pure Rust, ACID) |
+| `clap` (derive) | CLI argument parsing (with `ValueEnum` for `SortOrder`) |
+| `reqwest` (blocking+json) | HTTP client |
+| `tar` + `zstd` + `flate2` + `xz2` + `bzip2` + `ar` + `zip` | Archive formats |
+| `sha2` | SHA256 checksums |
+| `indicatif` + `dialoguer` | Progress bars and interactive prompts |
 
-### Supported distros/layouts
-- Standard FHS (Fedora, RHEL, SUSE, Void, etc.)
-- Merged /usr (Arch, Ubuntu 22+, Fedora 33+, Debian 12+)
-- Debian multiarch (`/usr/lib/x86_64-linux-gnu/`)
-- Alpine/Void musl
-- NixOS (`/nix/store`)
-- GNU Guix (`/gnu/store`)
-- Termux on Android
-- GoboLinux
-- Any architecture: x86_64, aarch64, armv7, riscv64, i686, s390x, ppc64le
+### Code quality
 
-## Implementation Status
+- **Zero clippy warnings**: `cargo clippy -- -D warnings` passes clean
+- **Zero `cargo fmt` diff**: all code is formatted
+- **195 tests**: comprehensive coverage of core modules (conflicts, ELF, path mapping, DB, graph, transaction, verify, plugins, search scoring, system detection)
 
-### Phase 1: Core + Pacman plugin + Universal distro support (complete)
-- [x] Project skeleton: Cargo.toml with all dependencies, full directory structure
-- [x] `error.rs` — ZlError enum with all variants, ZlResult alias, retry_with_backoff()
-- [x] `paths.rs` — ZlPaths struct with ensure_dirs()
-- [x] `config.rs` — ZlConfig, GeneralConfig, SystemConfig, PluginConfig deserialization
-- [x] `main.rs` — Full bootstrap: config, SystemProfile detection, paths, DB, plugin registry, CLI dispatch
-- [x] `lib.rs` — Re-exports core modules including system
-- [x] `system/` — Full SystemProfile detection (arch, interpreter, libc, lib dirs, layout)
-- [x] `core/elf/` — ELF analysis (goblin) and patching (elb) with dynamic page size
-- [x] `core/path/` — PathMapping with dynamic prefix map, script/shebang remapping
-- [x] `core/graph/` — DepGraph, topological sort, cycle detection, orphan detection, verification
-- [x] `core/db/` — redb tables, CRUD for packages/files/libs/deps/plugin metadata
-- [x] `plugin/pacman/` — Full PacmanPlugin: sync, search, resolve, download, extract
+### Naming conventions
 
-### Phase 2: Dep resolution + Parallel downloads + Source builds + Error handling (complete)
-- [x] `cli/deps.rs` — Recursive dependency resolution with cycle detection, install plan display
-- [x] `cli/install.rs` — Full dep resolution, parallel downloads (4 threads), sequential install
-- [x] `cli/remove.rs` — Improved orphan detection using dep table + lib needs
-- [x] `cli/update.rs` — Uses install_single_package(), only updates explicit packages
-- [x] `core/build/` — BuildSpec, BuildSystem enum, detect + build for autotools/cmake/meson/cargo/make
-- [x] `core/db/ops.rs` — Dependency tracking: register, get, reverse lookup, remove
-- [x] `plugin/pacman/mod.rs` — Provides-based virtual package resolution
-- [x] `plugin/pacman/package.rs` — Download with retry, checksum cache verification
-- [x] `plugin/pacman/database.rs` — DB sync with retry
-
-### Phase 3: Safety, UX, and package management features (complete)
-- [x] `core/transaction.rs` — Atomic install transactions: track files/dirs/symlinks/DB entries, rollback on failure
-- [x] `core/conflicts.rs` — Pre-install conflict detection: file ownership, binary name, library soname, declared conflicts, version constraints (with component-by-component comparison)
-- [x] `core/db/schema.rs` — Added PINNED table for package pinning
-- [x] `core/db/ops.rs` — Added pin_package(), unpin_package(), is_pinned(), list_pinned()
-- [x] `cli/install.rs` — Integrated: conflict checking, transaction-wrapped installs, progress bars (indicatif)
-- [x] `cli/update.rs` — Respects pinned packages (skips them during updates)
-- [x] `cli/info.rs` — Detailed package info: name, version, source, status, deps, reverse deps, disk usage
-- [x] `cli/cache.rs` — Cache management: `zl cache list` (files + sizes), `zl cache clean` (free space)
-- [x] `cli/completions.rs` — Shell completions: `zl completions bash/zsh/fish` via clap_complete
-- [x] `cli/list.rs` — Enhanced: `--explicit`, `--deps`, `--orphans` filters, pin status display
-- [x] `cli/pin.rs` — Pin/unpin packages: `zl pin <pkg>`, `zl unpin <pkg>`
-- [x] `cli/lockfile.rs` — Lockfile: `zl export [file]`, `zl import <file>` (JSON format)
-- [x] `cli/mod.rs` — All new commands wired up: Info, Cache, Completions, Pin, Unpin, Export, Import
-
-### Phase 4: Security, multi-version, environments, and mass upgrade (complete)
-- [x] `core/verify.rs` — Package verification: SHA256 checksum validation + GPG signature verification (best-effort, uses system gpg when available)
-- [x] `cli/install.rs` — Integrated verification pipeline: all downloads verified before install, `--skip-verify` flag to bypass
-- [x] `cli/install.rs` — Dry-run mode (`--dry-run` / `--simulate`): shows install plan without making changes
-- [x] `cli/remove.rs` — Dry-run support, version-specific removal (`--version`), multi-version aware
-- [x] `cli/update.rs` — Dry-run support, integrated verification
-- [x] `cli/upgrade.rs` — Mass upgrade: `zl upgrade` checks all packages, shows summary, confirms, upgrades in batch. `--check` for preview-only, `--from` to filter by source
-- [x] `cli/install.rs` — Multi-version support: install multiple versions side-by-side (e.g., `zl install firefox --version 120.0` and `--version 121.0`)
-- [x] `cli/install.rs` — `zl switch <pkg> <version>`: change which version's binaries are active (symlinked to bin/)
-- [x] `core/db/ops.rs` — Added `get_all_versions(name)`: query all installed versions of a package
-- [x] `cli/selfupdate.rs` — Self-update: `zl self-update` downloads latest release from GitHub, verifies architecture, atomically replaces binary
-- [x] `cli/env.rs` — Ephemeral environments: `zl env shell [name]` spawns an isolated shell with its own ZL root. Temporary envs are auto-deleted on exit. Named envs persist.
-- [x] `cli/env.rs` — Environment management: `zl env list`, `zl env delete <name>`
-- [x] `cli/mod.rs` — Global flags: `--dry-run`/`--simulate`, `--skip-verify`
-- [x] `error.rs` — New error variants: GpgVerification, SelfUpdate, Environment
-
-### Phase 5c: Error handling + XDG integration (complete)
-- [x] `core/db/ops.rs` — DB init: propagate `open_table` errors instead of silently swallowing
-- [x] `cli/install.rs` — Script remap failures now logged with `tracing::warn!` instead of `let _ =`
-- [x] `cli/install.rs` — Thread join panic handled without `unwrap()`; poisoned Mutex recovered with `into_inner()`
-- [x] `cli/install.rs` — `install_xdg_assets()`: symlinks `.desktop` files to `$XDG_DATA_HOME/applications/`, icons to `$XDG_DATA_HOME/icons/` (full tree). Uses `dirs::data_local_dir()` — works on all distros
-- [x] `cli/install.rs` — `patch_desktop_exec()`: rewrites `Exec=` in .desktop files to strip absolute path prefix so binary is found via PATH
-- [x] `cli/selfupdate.rs` — Distinct error message for 404 (no releases) vs network errors
-- [x] `error.rs` — Better hint for `SelfUpdate` permission denied: suggests `sudo zl self-update`
-- [x] `cli/mod.rs` — `verbose` changed from `bool` to `u8` (`ArgAction::Count`): `-v` = info, `-vv` = debug
-- [x] `main.rs` — Default log level changed from `info` to `warn` (clean output by default)
-- [x] `cli/selfupdate.rs` — Fixed GitHub repo URL: `supercosti21/zero_layer` (was `zero-layer/zl`)
-
-### Phase 5b: Interactive multi-source selection (complete)
-- [x] `cli/install.rs` — `pick_source()`: when `--from` is omitted, resolves from ALL plugins in parallel, then:
-  - 0 results → `PackageNotFound` error
-  - 1 result → auto-selects (no prompt)
-  - N results + `--yes` → picks first (highest-priority plugin, i.e. pacman)
-  - N results → shows `dialoguer::Select` for interactive choice
-- [x] `cli/install.rs` — `handle()` now determines `from: String` before syncing, so `plugin.sync()` and `deps::resolve_with_deps()` always use a known source name
-
-### Phase 5: New plugins — AUR, APT, GitHub Releases (complete)
-- [x] `plugin/aur/mod.rs` — AurPlugin: live AUR RPC API v5 (search/resolve), git clone + makepkg build. `zl install yay --from aur`
-- [x] `plugin/apt/index.rs` — APT Packages index parser: RFC 2822-like format, dep list parsing, short-description extraction
-- [x] `plugin/apt/deb.rs` — .deb extraction: ar → data.tar.{gz,xz,zst,bz2}, SHA256 cache validation, retry download
-- [x] `plugin/apt/mod.rs` — AptPlugin: Packages.gz sync per component, in-memory DB, configurable mirror/suite/arch. `zl install vim --from apt`
-- [x] `plugin/github/mod.rs` — GithubPlugin: GitHub Releases API, smart asset scoring (arch, musl, format), extract tar.gz/tar.xz/zip/AppImage/bare binary. `zl install sharkdp/bat --from github`
-- [x] `Cargo.toml` — Added: `ar`, `bzip2`, `zip`, `xz2`, reqwest `json` feature
-- [x] `plugin/mod.rs` — Added `pub mod aur; pub mod apt; pub mod github;`
-- [x] `main.rs` — All three plugins registered at startup (AurPlugin, AptPlugin, GithubPlugin)
-- [x] All tests pass: **79 tests** (was 72 → +7 new: 3 apt::index, 1 aur, 3 github)
-
-### All tests pass: 79 tests
-
-### Removed
-- `core/path/fhs.rs` — replaced by `system/` module. No more hardcoded FHS constants.
-
-### Future work (Phase 6+)
-- [ ] Additional plugins: RPM, AppImage, pip, npm, cargo
-- [ ] Cross-OS support (macOS/Homebrew via HostAdapter trait)
-- [ ] Interactive conflict resolution (dialoguer is already in deps)
-- [ ] Async HTTP for even faster parallel downloads
-- [ ] Hook system: pre/post install scripts
-- [ ] TUI interactive mode for search and selection
+- `SystemLayout` variants use PascalCase: `Fhs`, `MergedUsr`, `NixOS`, `Guix`, `Termux`, `GoboLinux`, `Custom`
+- `Conflict` variants avoid repeating the enum name: `Declared` (not `DeclaredConflict`), `Version` (not `VersionConflict`)
+- `Arch::parse()` and `SystemLayout::parse()` instead of `from_str()` (avoids confusion with `std::str::FromStr` trait)
+- `SortOrder` enum (in `cli/mod.rs`) uses `ValueEnum` derive for clap: `Relevance`, `Name`, `Version`
+- Structs with simple `new()` constructors also implement `Default` (via `#[derive(Default)]` or manual impl): `PluginRegistry`, `PacmanPlugin`, `AptPlugin`, `AurPlugin`, `GithubPlugin`, `DepGraph`, `Transaction`
+- The `core/build/` module uses `#![allow(dead_code)]` since it is scaffolding for future source-build support
+- `DepGraph`, `DependencyEdge`, `DepType` have `#[allow(dead_code)]` — they are part of the graph model used for future features
+- `ArchMismatch` error variant has `#[allow(dead_code)]` — available for strict arch enforcement in future

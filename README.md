@@ -562,11 +562,20 @@ repos = ["core", "extra"]
 
 ```bash
 cargo build              # Build
-cargo test               # Run all tests (79 tests)
+cargo test               # Run all tests (195 tests: 103 bin + 92 lib)
 cargo test <name>        # Run a single test
 cargo clippy             # Lint
 cargo fmt                # Format
 ```
+
+### Development Workflow Rules
+
+1. **Feature branches** — Never work directly on `main`. Always create a branch first.
+2. **Branch naming** — Use prefixed names: `feat/xxx`, `fix/xxx`, `chore/xxx`, `refactor/xxx`, `docs/xxx`.
+3. **Merge** — Only merge to `main` when everything works (tests pass, clippy clean, fmt clean). Delete the branch after merge.
+4. **Atomic commits** — 1 commit = 1 concept. Better 3 small focused commits than 1 giant commit.
+5. **Commit message format** — `type: clear title` + bullet points for details. Types: `feat`, `fix`, `chore`, `refactor`, `docs`.
+6. **Documentation** — After every significant change, update `CLAUDE.md` (implementation state, module structure, test count), then `README.md` if user-facing features changed.
 
 ## License
 

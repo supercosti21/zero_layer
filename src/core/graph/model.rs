@@ -19,28 +19,30 @@ pub struct PackageNode {
     pub explicit: bool,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DependencyEdge {
     pub dep_type: DepType,
     pub version_constraint: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum DepType {
     Declared,
     SharedLibrary { lib_name: String },
 }
 
+#[derive(Default)]
+#[allow(dead_code)]
 pub struct DepGraph {
     pub graph: DiGraph<PackageNode, DependencyEdge>,
     pub index: HashMap<String, NodeIndex>,
 }
 
+#[allow(dead_code)]
 impl DepGraph {
     pub fn new() -> Self {
-        Self {
-            graph: DiGraph::new(),
-            index: HashMap::new(),
-        }
+        Self::default()
     }
 }

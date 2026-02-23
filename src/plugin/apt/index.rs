@@ -39,10 +39,11 @@ pub fn parse(content: &str) -> Vec<AptEntry> {
 
         if line.starts_with(' ') || line.starts_with('\t') {
             // Continuation line — append to current field (with newline separator)
-            if !current_key.is_empty() {
-                fields
-                    .get_mut(current_key)
-                    .map(|v| { v.push('\n'); v.push_str(line.trim_start()); });
+            if !current_key.is_empty()
+                && let Some(v) = fields.get_mut(current_key)
+            {
+                v.push('\n');
+                v.push_str(line.trim_start());
             }
         } else if let Some((key, value)) = line.split_once(": ") {
             current_key = key;
@@ -55,10 +56,10 @@ pub fn parse(content: &str) -> Vec<AptEntry> {
     }
 
     // Handle final record if file doesn't end with blank line
-    if !fields.is_empty() {
-        if let Some(entry) = build_entry(&fields) {
-            entries.push(entry);
-        }
+    if !fields.is_empty()
+        && let Some(entry) = build_entry(&fields)
+    {
+        entries.push(entry);
     }
 
     entries
@@ -148,10 +149,7 @@ Description: small, friendly text editor inspired by Pico
         assert_eq!(vim.depends, vec!["vim-common", "libacl1"]);
         assert_eq!(vim.conflicts, vec!["vim-tiny"]);
         assert_eq!(vim.provides, vec!["editor"]);
-        assert_eq!(
-            vim.description,
-            "Vi IMproved - enhanced vi editor"
-        );
+        assert_eq!(vim.description, "Vi IMproved - enhanced vi editor");
 
         let nano = &entries[1];
         assert_eq!(nano.name, "nano");

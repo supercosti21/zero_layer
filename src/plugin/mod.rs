@@ -25,6 +25,7 @@ pub struct PackageCandidate {
 
 pub struct ExtractedPackage {
     pub extract_dir: tempfile::TempDir,
+    #[allow(dead_code)]
     pub metadata: PackageCandidate,
     pub files: Vec<PathBuf>,
     pub elf_files: Vec<PathBuf>,
@@ -42,15 +43,14 @@ pub trait SourcePlugin: Send + Sync {
     fn sync(&self) -> ZlResult<()>;
 }
 
+#[derive(Default)]
 pub struct PluginRegistry {
     plugins: Vec<Box<dyn SourcePlugin>>,
 }
 
 impl PluginRegistry {
     pub fn new() -> Self {
-        Self {
-            plugins: Vec::new(),
-        }
+        Self::default()
     }
 
     pub fn register(&mut self, plugin: Box<dyn SourcePlugin>) {

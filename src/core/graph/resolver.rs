@@ -6,6 +6,7 @@ use std::collections::HashSet;
 use super::model::{DepGraph, DepType, DependencyEdge, PackageNode};
 use crate::error::{ZlError, ZlResult};
 
+#[allow(dead_code)]
 impl DepGraph {
     /// Add a package to the graph and return its node index
     pub fn add_package(&mut self, node: PackageNode) -> NodeIndex {
@@ -71,10 +72,10 @@ impl DepGraph {
     pub fn topological_order(&self) -> ZlResult<Vec<NodeIndex>> {
         toposort(&self.graph, None).map_err(|cycle| {
             let node = &self.graph[cycle.node_id()];
-            ZlError::DependencyResolution {
-                package: format!("{}-{}", node.id.name, node.id.version),
-                message: "Dependency cycle detected".into(),
-            }
+            ZlError::Config(format!(
+                "Dependency cycle detected involving {}-{}",
+                node.id.name, node.id.version
+            ))
         })
     }
 
@@ -190,7 +191,7 @@ mod tests {
         let mut graph = DepGraph::new();
         let _a = graph.add_package(make_node("a", "1.0", true));
         let b = graph.add_package(make_node("b", "1.0", false));
-        let c = graph.add_package(make_node("c", "1.0", false));
+        let _c = graph.add_package(make_node("c", "1.0", false));
         graph.add_dependency(_a, b, None);
         // c is a dependency-type package but nothing depends on it => orphan
 
