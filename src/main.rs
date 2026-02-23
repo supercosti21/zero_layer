@@ -11,10 +11,19 @@ use clap::Parser;
 use config::ZlConfig;
 use core::db::ops::ZlDatabase;
 use paths::ZlPaths;
+use plugin::apk_alpine::ApkAlpinePlugin;
+use plugin::appimage::AppImagePlugin;
 use plugin::apt::AptPlugin;
 use plugin::aur::AurPlugin;
+use plugin::dnf::DnfPlugin;
+use plugin::flatpak::FlatpakPlugin;
 use plugin::github::GithubPlugin;
+use plugin::nix::NixPlugin;
 use plugin::pacman::PacmanPlugin;
+use plugin::portage::PortagePlugin;
+use plugin::snap::SnapPlugin;
+use plugin::xbps::XbpsPlugin;
+use plugin::zypper::ZypperPlugin;
 use plugin::{PluginRegistry, SourcePlugin};
 use system::SystemProfile;
 
@@ -53,13 +62,23 @@ fn run(cli_args: cli::Cli) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    // Load config
-    let config = ZlConfig::load()?;
+    // Load config (or create default)
+    let mut config = ZlConfig::load()?;
 
     // Detect system profile (replaces all hardcoded FHS assumptions)
     let mut profile = SystemProfile::detect();
     profile.apply_overrides(&config.system);
     tracing::debug!("System profile: {}", profile);
+
+    // First-run wizard: if no config exists and not in auto-yes mode, ask user to pick sources
+    let config_path = ZlConfig::default_path();
+    if !config_path.exists()
+        && !cli_args.global.yes
+        && let Ok(Some(chosen)) = cli::sources::first_run_wizard(&profile)
+    {
+        config.general.sources = Some(chosen);
+        let _ = config.save();
+    }
 
     // Setup paths (CLI --root overrides config)
     let root_override = cli_args
@@ -73,27 +92,42 @@ fn run(cli_args: cli::Cli) -> anyhow::Result<()> {
     // Open database
     let db = ZlDatabase::open(&zl_paths.db_file)?;
 
-    // Setup plugin registry
+    // Setup plugin registry — register all plugins
     let mut registry = PluginRegistry::new();
-    let mut pacman = PacmanPlugin::new();
-    let mut pacman_config = config.plugin_config("pacman");
-    pacman_config.cache_dir = zl_paths.cache.join("pacman");
-    pacman.init(&pacman_config)?;
-    registry.register(Box::new(pacman));
 
-    let mut aur = AurPlugin::new();
-    aur.init(&config.plugin_config("aur"))?;
-    registry.register(Box::new(aur));
+    // Helper macro to reduce boilerplate
+    macro_rules! register_plugin {
+        ($plugin:expr, $name:expr) => {{
+            let mut plugin = $plugin;
+            let pc = config.plugin_config($name);
+            if pc.enabled {
+                let mut pc = pc;
+                pc.cache_dir = zl_paths.cache.join($name);
+                plugin.init(&pc)?;
+                registry.register(Box::new(plugin));
+            }
+        }};
+    }
 
-    let mut apt = AptPlugin::new();
-    let mut apt_config = config.plugin_config("apt");
-    apt_config.cache_dir = zl_paths.cache.join("apt");
-    apt.init(&apt_config)?;
-    registry.register(Box::new(apt));
+    // Register all plugins (order = priority for auto-selection)
+    register_plugin!(PacmanPlugin::new(), "pacman");
+    register_plugin!(AurPlugin::new(), "aur");
+    register_plugin!(AptPlugin::new(), "apt");
+    register_plugin!(DnfPlugin::new(), "dnf");
+    register_plugin!(ZypperPlugin::new(), "zypper");
+    register_plugin!(ApkAlpinePlugin::new(), "apk");
+    register_plugin!(XbpsPlugin::new(), "xbps");
+    register_plugin!(PortagePlugin::new(), "portage");
+    register_plugin!(NixPlugin::new(), "nix");
+    register_plugin!(FlatpakPlugin::new(), "flatpak");
+    register_plugin!(SnapPlugin::new(), "snap");
+    register_plugin!(AppImagePlugin::new(), "appimage");
+    register_plugin!(GithubPlugin::new(), "github");
 
-    let mut github = GithubPlugin::new();
-    github.init(&config.plugin_config("github"))?;
-    registry.register(Box::new(github));
+    // Apply source filter from config (sources whitelist)
+    if let Some(sources) = config.enabled_sources() {
+        registry.retain_sources(sources);
+    }
 
     let ctx = cli::AppContext {
         paths: &zl_paths,
@@ -130,6 +164,7 @@ fn run(cli_args: cli::Cli) -> anyhow::Result<()> {
         cli::Commands::Size(args) => cli::size::handle(args, ctx.db)?,
         cli::Commands::Diff(args) => cli::diff::handle(args, &ctx)?,
         cli::Commands::Audit(args) => cli::audit::handle(args, ctx.db)?,
+        cli::Commands::Sources(cmd) => cli::sources::handle(cmd, ctx.registry)?,
     }
 
     Ok(())

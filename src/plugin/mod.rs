@@ -1,7 +1,17 @@
+pub mod apk_alpine;
+pub mod appimage;
 pub mod apt;
 pub mod aur;
+pub mod dnf;
+pub mod flatpak;
 pub mod github;
+pub mod nix;
 pub mod pacman;
+pub mod portage;
+pub mod rpm;
+pub mod snap;
+pub mod xbps;
+pub mod zypper;
 
 use std::path::{Path, PathBuf};
 
@@ -75,6 +85,18 @@ impl PluginRegistry {
             Some(n) => self.get(n),
             None => self.plugins.first().map(|p| p.as_ref()),
         }
+    }
+
+    /// Return the names of all registered plugins
+    pub fn names(&self) -> Vec<&str> {
+        self.plugins.iter().map(|p| p.name()).collect()
+    }
+
+    /// Keep only plugins whose name is in the given list.
+    /// Also respects per-plugin `enabled` flag via the config.
+    pub fn retain_sources(&mut self, sources: &[String]) {
+        self.plugins
+            .retain(|p| sources.iter().any(|s| s == p.name()));
     }
 
     /// List all registered plugin names and their display names

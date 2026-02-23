@@ -72,3 +72,9 @@ zip = "2"
 
 # Plugin: APT + GitHub (XZ decompression for .tar.xz and Packages.xz)
 xz2 = "0.1"
+
+# Plugin: DNF/Zypper (RPM repodata XML parsing)
+quick-xml = "0.37"
+
+# Plugin: DNF/Zypper (RPM cpio extraction)
+cpio = "0.4"

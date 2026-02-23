@@ -16,6 +16,7 @@ pub mod run;
 pub mod search;
 pub mod selfupdate;
 pub mod size;
+pub mod sources;
 pub mod update;
 pub mod upgrade;
 pub mod why;
@@ -135,6 +136,30 @@ pub enum Commands {
     Diff(DiffArgs),
     /// Check installed packages for known vulnerabilities (CVE)
     Audit(AuditArgs),
+    /// Manage package sources (enable, disable, list)
+    #[command(subcommand)]
+    Sources(SourcesCommand),
+}
+
+#[derive(Subcommand)]
+pub enum SourcesCommand {
+    /// List all available sources and their status
+    List,
+    /// Enable specific sources
+    Enable(SourcesModifyArgs),
+    /// Disable specific sources
+    Disable(SourcesModifyArgs),
+    /// Enable ONLY these sources (disable all others)
+    Only(SourcesModifyArgs),
+    /// Remove source filter (enable all sources)
+    Reset,
+}
+
+#[derive(Args)]
+pub struct SourcesModifyArgs {
+    /// Source names to modify (e.g., pacman apt dnf)
+    #[arg(required = true)]
+    pub names: Vec<String>,
 }
 
 #[derive(Args)]
@@ -181,7 +206,7 @@ pub struct UpgradeArgs {
 pub struct SearchArgs {
     /// Search query
     pub query: String,
-    /// Limit to a specific source
+    /// Limit to specific sources (comma-separated, e.g., pacman,apt)
     #[arg(long)]
     pub from: Option<String>,
     /// Maximum results per source (default: 20)

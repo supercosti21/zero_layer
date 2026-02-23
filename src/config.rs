@@ -1,11 +1,11 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::error::ZlResult;
 
 /// Top-level ZL configuration (~/.config/zl/config.toml)
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Serialize, Default)]
 pub struct ZlConfig {
     /// Global settings
     #[serde(default)]
@@ -19,7 +19,7 @@ pub struct ZlConfig {
 }
 
 /// User overrides for auto-detected system profile
-#[derive(Debug, Deserialize, Default, Clone)]
+#[derive(Debug, Deserialize, Serialize, Default, Clone)]
 pub struct SystemConfig {
     /// Override the auto-detected dynamic linker path
     pub interpreter: Option<PathBuf>,
@@ -33,21 +33,24 @@ pub struct SystemConfig {
     pub layout: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Serialize, Default)]
 pub struct GeneralConfig {
     /// Override ZL root directory
     pub root: Option<PathBuf>,
     /// Whether to auto-confirm prompts
     #[serde(default)]
     pub auto_confirm: bool,
+    /// Enabled sources whitelist. If set, only these plugins are loaded.
+    /// If None or empty, all plugins are loaded.
+    #[serde(default)]
+    pub sources: Option<Vec<String>>,
 }
 
 /// Configuration for a single plugin
-#[derive(Debug, Deserialize, Default, Clone)]
+#[derive(Debug, Deserialize, Serialize, Default, Clone)]
 pub struct PluginConfig {
     /// Whether this plugin is enabled
     #[serde(default = "default_true")]
-    #[allow(dead_code)]
     pub enabled: bool,
     /// Cache directory for this plugin (set at runtime)
     #[serde(skip)]
@@ -80,7 +83,8 @@ impl ZlConfig {
         toml::from_str(&content).map_err(|e| crate::error::ZlError::Config(e.to_string()))
     }
 
-    fn default_path() -> PathBuf {
+    /// Return the default config file path
+    pub fn default_path() -> PathBuf {
         dirs::config_dir()
             .unwrap_or_else(|| PathBuf::from("~/.config"))
             .join("zl")
@@ -90,5 +94,26 @@ impl ZlConfig {
     /// Get plugin config, returning default if not configured
     pub fn plugin_config(&self, name: &str) -> PluginConfig {
         self.plugins.get(name).cloned().unwrap_or_default()
+    }
+
+    /// Save config to the default path
+    pub fn save(&self) -> ZlResult<()> {
+        let path = Self::default_path();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let content = toml::to_string_pretty(self)
+            .map_err(|e| crate::error::ZlError::Config(e.to_string()))?;
+        std::fs::write(&path, content)?;
+        Ok(())
+    }
+
+    /// Returns the list of enabled sources, or None if all should be used
+    pub fn enabled_sources(&self) -> Option<&[String]> {
+        self.general
+            .sources
+            .as_ref()
+            .filter(|s| !s.is_empty())
+            .map(|s| s.as_slice())
     }
 }
