@@ -401,6 +401,18 @@ pub fn install_from_archive(
     let mapping =
         PathMapping::for_package(&paths.root, &candidate.name, &candidate.version, profile);
 
+    // Check architecture compatibility of ELF binaries before patching
+    for elf_path in &extracted.elf_files {
+        if let Ok(info) = analysis::analyze(elf_path) {
+            if let Err(msg) = analysis::check_arch_compat(&info, &profile.arch) {
+                eprintln!("  Warning: {}", msg);
+                eprintln!("    This package may not work on your system.");
+            }
+            // Only check the first ELF to avoid spam
+            break;
+        }
+    }
+
     // Patch ELF binaries
     for elf_path in &extracted.elf_files {
         match analysis::analyze(elf_path) {
@@ -526,7 +538,7 @@ pub fn install_from_archive(
         },
         installed_files: installed_files.clone(),
         provides_libs: provides_libs.clone(),
-        needs_libs,
+        needs_libs: needs_libs.clone(),
         installed_at: now,
         explicit,
     };
@@ -561,6 +573,35 @@ pub fn install_from_archive(
     if !verification.all_ok {
         let report = crate::core::graph::verifier::format_report(&verification);
         eprintln!("  Warning: {}", report);
+    }
+
+    // Post-install: check for missing shared libraries
+    let mut missing_libs = Vec::new();
+    for lib in &needs_libs {
+        // Check if provided by another ZL package
+        if db.lib_provider(lib)?.is_some() {
+            continue;
+        }
+        // Check if found on the host system
+        if profile.system_lib_exists(lib) {
+            continue;
+        }
+        // Check if provided by this package itself
+        if lib_index_paths.contains_key(lib) {
+            continue;
+        }
+        missing_libs.push(lib.as_str());
+    }
+    if !missing_libs.is_empty() {
+        eprintln!(
+            "  Warning: {} missing shared lib(s) for {}:",
+            missing_libs.len(),
+            candidate.name
+        );
+        for lib in &missing_libs {
+            eprintln!("    - {}", lib);
+        }
+        eprintln!("    hint: install the providing package or check your system libraries");
     }
 
     tracing::info!(
@@ -831,7 +872,21 @@ fn patch_desktop_exec(content: &str, _bin_dir: &Path) -> String {
         .join("\n")
 }
 
+/// Represents a single install option found across all sources.
+struct InstallOption {
+    /// Plugin name (e.g. "pacman", "aur", "github")
+    plugin_name: String,
+    /// The resolved package candidate
+    candidate: PackageCandidate,
+    /// Human-readable label for the interactive picker
+    label: String,
+}
+
 /// When `--from` is not specified, resolve from all plugins and pick a source.
+///
+/// Queries ALL sources in parallel (including AUR `-bin` variants) and presents
+/// a comprehensive list so the user can choose between binary vs source builds,
+/// different repos, etc.
 ///
 /// - 0 results  → PackageNotFound error
 /// - 1 result   → auto-select (no prompt)
@@ -845,74 +900,127 @@ fn pick_source(
 ) -> ZlResult<String> {
     println!("Searching all sources for '{}'...", package);
 
-    let mut found: Vec<(String, String, String)> = Vec::new(); // (plugin_name, display_label, version)
+    let plugins = registry.all();
+    let found: std::sync::Mutex<Vec<InstallOption>> = std::sync::Mutex::new(Vec::new());
 
-    for plugin in registry.all() {
-        // Sync first so the local DB is up to date before querying
-        if let Err(e) = plugin.sync() {
-            tracing::debug!(
-                "Failed to sync {} during source discovery: {}",
-                plugin.name(),
-                e
-            );
-        }
+    // Query all plugins in parallel
+    std::thread::scope(|scope| {
+        let found = &found;
+        let mut handles = Vec::new();
 
-        match plugin.resolve(package, version) {
-            Ok(Some(candidate)) => {
-                let label = format!(
-                    "{} {}  [{}]{}",
-                    candidate.name,
-                    candidate.version,
-                    candidate.source,
-                    if candidate.description.is_empty() {
-                        String::new()
-                    } else {
-                        format!(
-                            " — {}",
-                            candidate.description.chars().take(60).collect::<String>()
-                        )
+        for plugin in &plugins {
+            handles.push(scope.spawn(move || {
+                // Sync first so the local DB is up to date
+                if let Err(e) = plugin.sync() {
+                    tracing::debug!(
+                        "Failed to sync {} during source discovery: {}",
+                        plugin.name(),
+                        e
+                    );
+                }
+
+                // Resolve exact name
+                match plugin.resolve(package, version) {
+                    Ok(Some(candidate)) => {
+                        let label = format_option_label(&candidate);
+                        let mut f = found.lock().unwrap();
+                        f.push(InstallOption {
+                            plugin_name: plugin.name().to_string(),
+                            candidate,
+                            label,
+                        });
                     }
-                );
-                found.push((plugin.name().to_string(), label, candidate.version));
-            }
-            Ok(None) => {}
-            Err(e) => {
-                tracing::debug!(
-                    "Plugin '{}' could not resolve '{}': {}",
-                    plugin.name(),
-                    package,
-                    e
-                );
+                    Ok(None) => {}
+                    Err(e) => {
+                        tracing::debug!(
+                            "Plugin '{}' could not resolve '{}': {}",
+                            plugin.name(),
+                            package,
+                            e
+                        );
+                    }
+                }
+
+                // For AUR: also check -bin, -appimage, -prebuilt variants
+                if plugin.name() == "aur" {
+                    for suffix in &["-bin", "-appimage", "-prebuilt"] {
+                        let variant_name = format!("{}{}", package, suffix);
+                        match plugin.resolve(&variant_name, None) {
+                            Ok(Some(candidate)) => {
+                                let label = format_option_label(&candidate);
+                                let mut f = found.lock().unwrap();
+                                f.push(InstallOption {
+                                    plugin_name: plugin.name().to_string(),
+                                    candidate,
+                                    label,
+                                });
+                            }
+                            Ok(None) => {}
+                            Err(_) => {}
+                        }
+                    }
+                }
+            }));
+        }
+
+        for handle in handles {
+            if handle.join().is_err() {
+                tracing::warn!("A source discovery thread panicked");
             }
         }
-    }
+    });
+
+    let mut found = found.into_inner().unwrap_or_default();
+
+    // Sort: exact name matches first, then by plugin priority order
+    let plugin_order: std::collections::HashMap<&str, usize> = plugins
+        .iter()
+        .enumerate()
+        .map(|(i, p)| (p.name(), i))
+        .collect();
+
+    found.sort_by(|a, b| {
+        let a_exact = a.candidate.name == package;
+        let b_exact = b.candidate.name == package;
+        // Exact name matches first
+        b_exact
+            .cmp(&a_exact)
+            // Then by plugin priority
+            .then_with(|| {
+                let a_prio = plugin_order.get(a.plugin_name.as_str()).unwrap_or(&99);
+                let b_prio = plugin_order.get(b.plugin_name.as_str()).unwrap_or(&99);
+                a_prio.cmp(b_prio)
+            })
+    });
 
     match found.len() {
         0 => Err(ZlError::PackageNotFound {
             name: package.to_string(),
         }),
         1 => {
-            let (source, label, _) = &found[0];
-            println!("Found: {}", label);
-            Ok(source.clone())
+            let opt = &found[0];
+            println!("Found: {}", opt.label);
+            Ok(opt.plugin_name.clone())
         }
         _ if auto_yes => {
-            // Non-interactive: pick first (highest-priority plugin)
-            let (source, label, _) = &found[0];
-            println!("Auto-selected: {}", label);
-            Ok(source.clone())
+            // Non-interactive: pick first (highest-priority, exact-name match)
+            let opt = &found[0];
+            println!("Auto-selected: {}", opt.label);
+            Ok(opt.plugin_name.clone())
         }
         _ => {
-            let items: Vec<&str> = found.iter().map(|(_, label, _)| label.as_str()).collect();
+            // Show all options with clear labeling
+            println!();
+            println!("  Found '{}' in {} options:", package, found.len());
+            println!();
+
+            let items: Vec<String> = found.iter().map(|o| o.label.clone()).collect();
+            let item_refs: Vec<&str> = items.iter().map(|s| s.as_str()).collect();
 
             let selection =
                 dialoguer::Select::with_theme(&dialoguer::theme::ColorfulTheme::default())
-                    .with_prompt(format!(
-                        "Found '{}' in {} sources. Select one",
-                        package,
-                        found.len()
-                    ))
-                    .items(&items)
+                    .with_prompt("Select package to install")
+                    .items(&item_refs)
                     .default(0)
                     .interact()
                     .map_err(|e| ZlError::Plugin {
@@ -920,9 +1028,42 @@ fn pick_source(
                         message: format!("Selection cancelled: {}", e),
                     })?;
 
-            Ok(found[selection].0.clone())
+            Ok(found[selection].plugin_name.clone())
         }
     }
+}
+
+/// Format a human-readable label for an install option.
+fn format_option_label(candidate: &PackageCandidate) -> String {
+    let type_tag = if candidate.name.ends_with("-bin")
+        || candidate.name.ends_with("-appimage")
+        || candidate.name.ends_with("-prebuilt")
+    {
+        " [binary]"
+    } else if candidate.source == "aur" {
+        " [source]"
+    } else if candidate.source == "github" {
+        " [release]"
+    } else {
+        ""
+    };
+
+    let desc = if candidate.description.is_empty() {
+        String::new()
+    } else {
+        let clean: String = candidate
+            .description
+            .trim_start_matches("[binary] ")
+            .chars()
+            .take(50)
+            .collect();
+        format!(" - {}", clean)
+    };
+
+    format!(
+        "{} {}  [{}]{}{}",
+        candidate.name, candidate.version, candidate.source, type_tag, desc
+    )
 }
 
 fn is_executable(path: &Path) -> bool {

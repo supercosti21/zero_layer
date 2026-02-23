@@ -21,7 +21,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 cargo build                  # Debug build
 cargo build --release        # Release build
 cargo run -- <subcommand>    # Run (e.g., cargo run -- install firefox)
-cargo test                   # Run all tests (186 tests: 90 bin + 96 lib)
+cargo test                   # Run all tests (195 tests: 103 bin + 92 lib)
 cargo test <name>            # Run a single test by name
 cargo test -- --nocapture    # Run tests with stdout visible
 cargo clippy                 # Lint
@@ -38,16 +38,33 @@ There are no integration tests — all tests are unit tests inside `#[cfg(test)]
 ### Install flow (the core operation)
 
 1. **Detect system** — `SystemProfile::detect()` auto-detects arch, dynamic linker, libc, lib dirs, filesystem layout
-2. **Resolve source** — if `--from` omitted, queries ALL plugins in parallel; user picks if multiple hits (`pick_source()` in `cli/install.rs`)
+2. **Resolve source** — if `--from` omitted, queries ALL plugins in parallel (including AUR `-bin` variants); user picks from full list via interactive `dialoguer::Select` (`pick_source()` in `cli/install.rs`)
 3. **Resolve deps** — recursive dependency resolution with cycle detection (`cli/deps.rs`)
 4. **Check conflicts** — 5 types: file ownership, binary name, library soname, declared conflicts, version constraints (`core/conflicts.rs`)
 5. **Download** in parallel (4 threads via `thread::scope`) with progress bars and retry
 6. **Verify** — SHA256 checksum + GPG signature (best-effort)
 7. **Extract** and analyze ELF binaries with `goblin`
-8. **Patch** ELF binaries with `elb` (set interpreter, RUNPATH) using detected page size
-9. **Remap** FHS paths to ZL-managed directories (`core/path/`)
-10. **Install** atomically — `Transaction` tracks all changes; rollback on any failure
-11. **Track** in redb database + dependency graph
+8. **Arch check** — verify ELF `e_machine` matches host architecture before patching (warning on mismatch)
+9. **Patch** ELF binaries with `elb` (set interpreter, RUNPATH) using detected page size
+10. **Remap** FHS paths to ZL-managed directories (`core/path/`)
+11. **Install** atomically — `Transaction` tracks all changes; rollback on any failure
+12. **Post-install checks** — warn about missing shared libraries not found in ZL DB or system lib dirs
+13. **Track** in redb database + dependency graph
+
+### Search flow (`zl search`)
+
+1. **Parallel queries** — all plugins are queried via `thread::scope` simultaneously (not sequentially)
+2. **Relevance scoring** — each result is scored: exact name match (100), starts-with (80), contains in name (60), description-only (30)
+3. **AUR binary discovery** — if the query doesn't end with `-bin`, automatically also fetches `-bin`, `-appimage`, `-prebuilt` variants and tags them `[binary]`
+4. **Sorted output** — results sorted by relevance (default), name, or version via `--sort`
+5. **Filtering** — `--exact` shows only exact name matches; `--from` limits to a single source; `--limit` controls results per source
+
+### Removal flow (`zl remove --cascade`)
+
+1. **Preview before action** — `--cascade` always shows what will and won't be removed before prompting
+2. **Orphan detection** — only removes packages that are: (a) tracked in ZL's DB, (b) marked as implicit (`explicit: false`), (c) not depended on by any remaining package (checked via both dependency table and shared lib needs)
+3. **Shared dep protection** — dependencies used by other packages are listed as "Keeping (needed by X)" and never removed
+4. **Dry-run support** — `--dry-run` with `--cascade` shows the full removal plan without touching anything
 
 ### Startup flow (`main.rs`)
 
@@ -77,7 +94,7 @@ All plugins implement `SourcePlugin` and are registered in `main.rs`. To add a n
 2. Add `pub mod <name>;` in `src/plugin/mod.rs`
 3. Instantiate and register in `main.rs`'s `run()` function
 
-Current plugins: `pacman` (Arch repos), `aur` (AUR RPC v5 + makepkg), `apt` (Packages.gz + .deb), `github` (Releases API).
+Current plugins: `pacman` (Arch repos), `aur` (AUR RPC v5 + makepkg, with `-bin` variant discovery), `apt` (Packages.gz + .deb), `github` (Releases API).
 
 ### Command dispatch pattern
 
@@ -86,6 +103,7 @@ Each CLI command lives in `src/cli/<command>.rs` with a `pub fn handle(...)` fun
 ### Error handling
 
 - `ZlError` enum in `error.rs` (thiserror, boxed where needed to keep size small) for domain errors with `.suggestion()` hints
+- Plugin-specific error suggestions: pacman mirror issues, APT repo failures, GitHub rate limits, AUR build failures (base-devel, PGP keys), architecture mismatches, self-update permissions
 - `anyhow::Result` at the top level (`run()` returns `anyhow::Result<()>`)
 - `retry_with_backoff()` in `error.rs` for HTTP retries (3 attempts: 1s, 2s, 4s)
 - Tracing: default level `warn`; `-v` = info, `-vv` = debug
@@ -115,11 +133,11 @@ Each CLI command lives in `src/cli/<command>.rs` with a `pub fn handle(...)` fun
 
 | Crate | Purpose |
 |-------|---------|
-| `goblin` | Read ELF metadata (interpreter, needed libs, rpath, soname) |
+| `goblin` | Read ELF metadata (interpreter, needed libs, rpath, soname, machine type) |
 | `elb` | Patch ELF binaries (set interpreter, set runpath) |
 | `petgraph` | Dependency graph with topological sort, cycle detection |
 | `redb` | Embedded key-value database (pure Rust, ACID) |
-| `clap` (derive) | CLI argument parsing |
+| `clap` (derive) | CLI argument parsing (with `ValueEnum` for `SortOrder`) |
 | `reqwest` (blocking+json) | HTTP client |
 | `tar` + `zstd` + `flate2` + `xz2` + `bzip2` + `ar` + `zip` | Archive formats |
 | `sha2` | SHA256 checksums |
@@ -129,13 +147,15 @@ Each CLI command lives in `src/cli/<command>.rs` with a `pub fn handle(...)` fun
 
 - **Zero clippy warnings**: `cargo clippy -- -D warnings` passes clean
 - **Zero `cargo fmt` diff**: all code is formatted
-- **186 tests**: comprehensive coverage of core modules (conflicts, ELF, path mapping, DB, graph, transaction, verify, plugins, system detection)
+- **195 tests**: comprehensive coverage of core modules (conflicts, ELF, path mapping, DB, graph, transaction, verify, plugins, search scoring, system detection)
 
 ### Naming conventions
 
 - `SystemLayout` variants use PascalCase: `Fhs`, `MergedUsr`, `NixOS`, `Guix`, `Termux`, `GoboLinux`, `Custom`
 - `Conflict` variants avoid repeating the enum name: `Declared` (not `DeclaredConflict`), `Version` (not `VersionConflict`)
 - `Arch::parse()` and `SystemLayout::parse()` instead of `from_str()` (avoids confusion with `std::str::FromStr` trait)
+- `SortOrder` enum (in `cli/mod.rs`) uses `ValueEnum` derive for clap: `Relevance`, `Name`, `Version`
 - Structs with simple `new()` constructors also implement `Default` (via `#[derive(Default)]` or manual impl): `PluginRegistry`, `PacmanPlugin`, `AptPlugin`, `AurPlugin`, `GithubPlugin`, `DepGraph`, `Transaction`
 - The `core/build/` module uses `#![allow(dead_code)]` since it is scaffolding for future source-build support
 - `DepGraph`, `DependencyEdge`, `DepType` have `#[allow(dead_code)]` — they are part of the graph model used for future features
+- `ArchMismatch` error variant has `#[allow(dead_code)]` — available for strict arch enforcement in future

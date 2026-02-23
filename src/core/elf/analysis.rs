@@ -121,6 +121,54 @@ pub fn scan_directory(dir: &Path) -> ZlResult<Vec<ElfInfo>> {
     Ok(results)
 }
 
+/// Map ELF e_machine value to our Arch enum.
+/// Returns None for unknown/unsupported machine types.
+pub fn elf_machine_to_arch(machine: u16) -> Option<crate::system::arch::Arch> {
+    use crate::system::arch::Arch;
+    use goblin::elf::header;
+    match machine {
+        header::EM_X86_64 => Some(Arch::X86_64),
+        header::EM_AARCH64 => Some(Arch::Aarch64),
+        header::EM_ARM => Some(Arch::Armv7),
+        header::EM_RISCV => Some(Arch::Riscv64), // could be 32-bit riscv but we assume 64
+        header::EM_386 => Some(Arch::I686),
+        header::EM_S390 => Some(Arch::S390x),
+        header::EM_PPC64 => Some(Arch::Ppc64le),
+        header::EM_MIPS => Some(Arch::Mips64),
+        _ => None,
+    }
+}
+
+/// Check if an ELF binary's architecture is compatible with the host system.
+/// Returns Ok(()) if compatible, or a descriptive error message if not.
+pub fn check_arch_compat(
+    info: &ElfInfo,
+    host_arch: &crate::system::arch::Arch,
+) -> Result<(), String> {
+    let elf_arch = match elf_machine_to_arch(info.machine) {
+        Some(a) => a,
+        None => return Ok(()), // Unknown machine type — skip check
+    };
+
+    if elf_arch == *host_arch {
+        return Ok(());
+    }
+
+    // Allow i686 binaries on x86_64 (multilib compat)
+    if *host_arch == crate::system::arch::Arch::X86_64
+        && elf_arch == crate::system::arch::Arch::I686
+    {
+        return Ok(());
+    }
+
+    Err(format!(
+        "Binary {} is built for {} but your system is {}",
+        info.path.display(),
+        elf_arch,
+        host_arch
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
