@@ -4,8 +4,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Rules
 
-- **Every time you make changes to the codebase**, update this CLAUDE.md file to reflect the new state (implementation status, module structure, known issues, etc.).
-- **If changes affect user-facing features, architecture, or usage**, also update README.md accordingly.
+These rules are **mandatory** for every Claude instance working on this repo.
+
+### Git workflow
+
+1. **Feature branches** — NEVER work directly on `main`. Always create a branch first.
+2. **Branch naming** — Use prefixed names: `feat/xxx`, `fix/xxx`, `chore/xxx`, `refactor/xxx`, `docs/xxx`.
+3. **Merge** — Only merge to `main` when everything works (tests pass, clippy clean, fmt clean). Delete the branch after merge.
+6. **Atomic commits** — 1 commit = 1 concept. Better 3 small focused commits than 1 giant commit. Each commit should be self-contained and pass CI on its own.
+7. **Commit message format** — `type: clear title` where type is `feat`, `fix`, `chore`, `refactor`, or `docs`. Add bullet points in the body for details when needed.
+8. **Documentation** — After every significant change, update `CLAUDE.md` first (implementation state, module structure, test count), then `README.md` if user-facing features changed.
 
 ## Project Overview
 
