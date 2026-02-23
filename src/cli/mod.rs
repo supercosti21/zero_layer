@@ -1,17 +1,24 @@
+pub mod audit;
 pub mod cache;
 pub mod completions;
 pub mod deps;
+pub mod diff;
+pub mod doctor;
 pub mod env;
+pub mod history;
 pub mod info;
 pub mod install;
 pub mod list;
 pub mod lockfile;
 pub mod pin;
 pub mod remove;
+pub mod run;
 pub mod search;
 pub mod selfupdate;
+pub mod size;
 pub mod update;
 pub mod upgrade;
+pub mod why;
 
 use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
@@ -113,6 +120,21 @@ pub enum Commands {
     /// Manage ephemeral environments
     #[command(subcommand)]
     Env(EnvCommand),
+    /// Run a package without installing (temporary execution)
+    Run(RunArgs),
+    /// Show install/remove history and rollback changes
+    #[command(subcommand)]
+    History(HistoryCommand),
+    /// Show why a package is installed (dependency chain)
+    Why(WhyArgs),
+    /// Diagnose system and ZL health
+    Doctor,
+    /// Show disk usage per package
+    Size(SizeArgs),
+    /// Show what would change if a package is updated
+    Diff(DiffArgs),
+    /// Check installed packages for known vulnerabilities (CVE)
+    Audit(AuditArgs),
 }
 
 #[derive(Args)]
@@ -198,6 +220,8 @@ pub enum CacheCommand {
     List,
     /// Remove all cached files
     Clean,
+    /// Deduplicate shared libraries using hardlinks
+    Dedup,
 }
 
 #[derive(Args)]
@@ -258,4 +282,64 @@ pub struct EnvShellArgs {
 pub struct EnvDeleteArgs {
     /// Name of the environment to delete
     pub name: String,
+}
+
+#[derive(Args)]
+pub struct RunArgs {
+    /// Package name to run
+    pub package: String,
+    /// Source to use (e.g., pacman, apt, github)
+    #[arg(long)]
+    pub from: Option<String>,
+    /// Specific version
+    #[arg(long)]
+    pub version: Option<String>,
+    /// Arguments to pass to the binary
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    pub args: Vec<String>,
+}
+
+#[derive(Subcommand)]
+pub enum HistoryCommand {
+    /// Show install/remove history
+    List,
+    /// Rollback the last N operations
+    Rollback(RollbackArgs),
+}
+
+#[derive(Args)]
+pub struct RollbackArgs {
+    /// Number of operations to rollback (default: 1)
+    #[arg(default_value = "1")]
+    pub count: usize,
+}
+
+#[derive(Args)]
+pub struct WhyArgs {
+    /// Package name to trace
+    pub package: String,
+}
+
+#[derive(Args)]
+pub struct SizeArgs {
+    /// Show only a specific package (default: all)
+    pub package: Option<String>,
+    /// Sort by size (largest first)
+    #[arg(long)]
+    pub sort: bool,
+}
+
+#[derive(Args)]
+pub struct DiffArgs {
+    /// Package name to diff
+    pub package: String,
+    /// Source to check (default: same as installed)
+    #[arg(long)]
+    pub from: Option<String>,
+}
+
+#[derive(Args)]
+pub struct AuditArgs {
+    /// Check only a specific package (default: all installed)
+    pub package: Option<String>,
 }

@@ -2,7 +2,7 @@ use std::path::Path;
 
 use redb::{Database, ReadableTable};
 
-use super::schema::{DEPENDENCIES, FILE_OWNERS, LIB_INDEX, PACKAGES, PINNED, PLUGIN_META};
+use super::schema::{DEPENDENCIES, FILE_OWNERS, HISTORY, LIB_INDEX, PACKAGES, PINNED, PLUGIN_META};
 use crate::core::graph::model::PackageNode;
 use crate::error::{ZlError, ZlResult};
 
@@ -34,6 +34,8 @@ impl ZlDatabase {
                 .map_err(|e| ZlError::Config(format!("Failed to init PLUGIN_META table: {}", e)))?;
             txn.open_table(PINNED)
                 .map_err(|e| ZlError::Config(format!("Failed to init PINNED table: {}", e)))?;
+            txn.open_table(HISTORY)
+                .map_err(|e| ZlError::Config(format!("Failed to init HISTORY table: {}", e)))?;
         }
         txn.commit()
             .map_err(|e| ZlError::Config(format!("Failed to commit init: {}", e)))?;
@@ -517,6 +519,80 @@ impl ZlDatabase {
             pinned.push((k.value().to_string(), v.value().to_string()));
         }
         Ok(pinned)
+    }
+
+    // ── History ──
+
+    /// Record a history entry (install, remove, upgrade, etc.)
+    pub fn record_history(&self, entry: &HistoryEntry) -> ZlResult<()> {
+        let key = format!("{:020}", entry.timestamp);
+        let value = serde_json::to_vec(entry)?;
+        let txn = self
+            .db
+            .begin_write()
+            .map_err(|e| ZlError::Config(e.to_string()))?;
+        {
+            let mut table = txn
+                .open_table(HISTORY)
+                .map_err(|e| ZlError::Config(e.to_string()))?;
+            table
+                .insert(key.as_str(), value.as_slice())
+                .map_err(|e| ZlError::Config(e.to_string()))?;
+        }
+        txn.commit().map_err(|e| ZlError::Config(e.to_string()))?;
+        Ok(())
+    }
+
+    /// List history entries, newest first
+    pub fn list_history(&self, limit: usize) -> ZlResult<Vec<HistoryEntry>> {
+        let txn = self
+            .db
+            .begin_read()
+            .map_err(|e| ZlError::Config(e.to_string()))?;
+        let table = txn
+            .open_table(HISTORY)
+            .map_err(|e| ZlError::Config(e.to_string()))?;
+        let mut entries = Vec::new();
+
+        let iter = table
+            .iter()
+            .map_err(|e: redb::StorageError| ZlError::Config(e.to_string()))?;
+        for entry in iter {
+            let (_, v) = entry.map_err(|e: redb::StorageError| ZlError::Config(e.to_string()))?;
+            let he: HistoryEntry = serde_json::from_slice(v.value())?;
+            entries.push(he);
+        }
+
+        entries.reverse(); // newest first
+        entries.truncate(limit);
+        Ok(entries)
+    }
+}
+
+/// A single history record
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct HistoryEntry {
+    pub timestamp: u64,
+    pub action: HistoryAction,
+    pub packages: Vec<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub enum HistoryAction {
+    Install,
+    Remove,
+    Upgrade,
+    Rollback,
+}
+
+impl std::fmt::Display for HistoryAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            HistoryAction::Install => write!(f, "install"),
+            HistoryAction::Remove => write!(f, "remove"),
+            HistoryAction::Upgrade => write!(f, "upgrade"),
+            HistoryAction::Rollback => write!(f, "rollback"),
+        }
     }
 }
 

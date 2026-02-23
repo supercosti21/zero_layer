@@ -2646,6 +2646,7 @@ dependencies = [
  "bzip2",
  "clap",
  "clap_complete",
+ "console",
  "dialoguer",
  "dirs",
  "elb",

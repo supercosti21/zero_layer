@@ -6,3 +6,4 @@ pub const LIB_INDEX: TableDefinition<&str, &str> = TableDefinition::new("lib_ind
 pub const DEPENDENCIES: TableDefinition<&str, &[u8]> = TableDefinition::new("dependencies");
 pub const PLUGIN_META: TableDefinition<&str, &[u8]> = TableDefinition::new("plugin_meta");
 pub const PINNED: TableDefinition<&str, &str> = TableDefinition::new("pinned");
+pub const HISTORY: TableDefinition<&str, &[u8]> = TableDefinition::new("history");

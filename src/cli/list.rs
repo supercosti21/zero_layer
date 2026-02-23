@@ -1,3 +1,5 @@
+use console::style;
+
 use crate::core::db::ops::ZlDatabase;
 use crate::error::ZlResult;
 
@@ -40,33 +42,37 @@ pub fn handle(args: ListArgs, db: &ZlDatabase) -> ZlResult<()> {
         pinned_list.into_iter().map(|(name, _)| name).collect();
 
     println!(
-        "{:<30} {:<20} {:<15} {:>6} Status",
-        "Name", "Version", "Source", "Files"
+        "{:<30} {:<20} {:<15} {:>6} {}",
+        style("Name").bold(),
+        style("Version").bold(),
+        style("Source").bold(),
+        style("Files").bold(),
+        style("Status").bold()
     );
     println!("{}", "-".repeat(85));
 
     for pkg in &filtered {
-        let mut status = Vec::new();
+        let mut status_parts = Vec::new();
         if pkg.explicit {
-            status.push("explicit");
+            status_parts.push(style("explicit").green().to_string());
         } else {
-            status.push("dep");
+            status_parts.push(style("dep").dim().to_string());
         }
         if pinned_names.contains(&pkg.id.name) {
-            status.push("pinned");
+            status_parts.push(style("pinned").yellow().to_string());
         }
 
         println!(
             "{:<30} {:<20} {:<15} {:>6} [{}]",
-            pkg.id.name,
-            pkg.id.version,
-            pkg.id.source,
+            style(&pkg.id.name).white().bold(),
+            style(&pkg.id.version).yellow(),
+            style(&pkg.id.source).cyan(),
             pkg.installed_files.len(),
-            status.join(", ")
+            status_parts.join(", ")
         );
     }
 
-    println!("\n{} package(s) listed.", filtered.len());
+    println!("\n{} package(s) listed.", style(filtered.len()).bold());
     Ok(())
 }
 

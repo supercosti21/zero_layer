@@ -114,12 +114,20 @@ pub fn handle(args: InstallArgs, ctx: &AppContext) -> ZlResult<()> {
     // 6. Download all packages with progress bars
     let total = plan.packages.len();
     let candidates: Vec<&PackageCandidate> = plan.packages.iter().map(|e| &e.candidate).collect();
+    let steps = 4;
 
-    println!("\nDownloading {} package(s)...", total);
+    println!(
+        "\n{} Downloading {} package(s)...",
+        console::style(format!("[1/{}]", steps)).dim(),
+        total
+    );
     let archives = download_parallel(&candidates, plugin, &ctx.paths.cache)?;
 
     // 7. Verify all downloads
-    println!("Verifying packages...");
+    println!(
+        "{} Verifying packages...",
+        console::style(format!("[2/{}]", steps)).dim()
+    );
     for (candidate, archive_path) in candidates.iter().zip(archives.iter()) {
         let result = verify::verify_package(
             archive_path,
@@ -133,6 +141,10 @@ pub fn handle(args: InstallArgs, ctx: &AppContext) -> ZlResult<()> {
     }
 
     // 8. Install each package with transaction support
+    println!(
+        "{} Installing & patching...",
+        console::style(format!("[3/{}]", steps)).dim()
+    );
     let mut txn = Transaction::new();
     let mut installed_count = 0;
 
@@ -177,16 +189,40 @@ pub fn handle(args: InstallArgs, ctx: &AppContext) -> ZlResult<()> {
     // Commit the transaction — all installs succeeded
     txn.commit();
 
+    // Record in history
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let _ = ctx.db.record_history(&crate::core::db::ops::HistoryEntry {
+        timestamp: now,
+        action: crate::core::db::ops::HistoryAction::Install,
+        packages: plan
+            .packages
+            .iter()
+            .map(|e| format!("{}-{}", e.candidate.name, e.candidate.version))
+            .collect(),
+    });
+
     // 9. Summary
+    println!(
+        "{} Done!",
+        console::style(format!("[{}/{}]", steps, steps)).dim()
+    );
     let dep_count = plan.dep_count();
     if dep_count > 0 {
         println!(
-            "\nInstalled {} package(s) + {} dependency(ies).",
+            "\n{} Installed {} package(s) + {} dependency(ies).",
+            console::style("✓").green().bold(),
             total - dep_count,
             dep_count
         );
     } else {
-        println!("\nInstalled {} package(s).", total);
+        println!(
+            "\n{} Installed {} package(s).",
+            console::style("✓").green().bold(),
+            total
+        );
     }
 
     if !plan.unresolvable.is_empty() {
@@ -413,16 +449,47 @@ pub fn install_from_archive(
         }
     }
 
-    // Patch ELF binaries
-    for elf_path in &extracted.elf_files {
-        match analysis::analyze(elf_path) {
-            Ok(info) => {
-                if let Err(e) = patcher::patch_for_zl(elf_path, &info, &mapping, profile) {
-                    tracing::warn!("Failed to patch {}: {}", elf_path.display(), e);
-                }
+    // Patch ELF binaries in parallel (thread::scope for zero-overhead parallelism)
+    if extracted.elf_files.len() > 1 {
+        std::thread::scope(|scope| {
+            let mapping = &mapping;
+            let chunk_size = (extracted.elf_files.len() / 4).max(1);
+            let mut handles = Vec::new();
+
+            for chunk in extracted.elf_files.chunks(chunk_size) {
+                handles.push(scope.spawn(move || {
+                    for elf_path in chunk {
+                        match analysis::analyze(elf_path) {
+                            Ok(info) => {
+                                if let Err(e) =
+                                    patcher::patch_for_zl(elf_path, &info, mapping, profile)
+                                {
+                                    tracing::warn!("Failed to patch {}: {}", elf_path.display(), e);
+                                }
+                            }
+                            Err(e) => {
+                                tracing::debug!("Skipping ELF {}: {}", elf_path.display(), e);
+                            }
+                        }
+                    }
+                }));
             }
-            Err(e) => {
-                tracing::debug!("Skipping ELF {}: {}", elf_path.display(), e);
+
+            for handle in handles {
+                let _ = handle.join();
+            }
+        });
+    } else {
+        for elf_path in &extracted.elf_files {
+            match analysis::analyze(elf_path) {
+                Ok(info) => {
+                    if let Err(e) = patcher::patch_for_zl(elf_path, &info, &mapping, profile) {
+                        tracing::warn!("Failed to patch {}: {}", elf_path.display(), e);
+                    }
+                }
+                Err(e) => {
+                    tracing::debug!("Skipping ELF {}: {}", elf_path.display(), e);
+                }
             }
         }
     }
@@ -1064,6 +1131,16 @@ fn format_option_label(candidate: &PackageCandidate) -> String {
         "{} {}  [{}]{}{}",
         candidate.name, candidate.version, candidate.source, type_tag, desc
     )
+}
+
+/// Simplified source picker for `zl run` — same as pick_source but public.
+pub fn pick_source_for_run(
+    package: &str,
+    version: Option<&str>,
+    registry: &PluginRegistry,
+    auto_yes: bool,
+) -> ZlResult<String> {
+    pick_source(package, version, registry, auto_yes)
 }
 
 fn is_executable(path: &Path) -> bool {

@@ -1,5 +1,7 @@
 use std::sync::Mutex;
 
+use console::style;
+
 use crate::error::ZlResult;
 use crate::plugin::{PackageCandidate, PluginRegistry, SourcePlugin};
 
@@ -146,8 +148,10 @@ pub fn handle(args: SearchArgs, registry: &PluginRegistry) -> ZlResult<()> {
         let shown = total_count.min(limit);
 
         println!(
-            "── {} ({} result{}) ──",
-            plugin.display_name(),
+            "{} ({} result{})",
+            style(format!("── {} ──", plugin.display_name()))
+                .cyan()
+                .bold(),
             total_count,
             if total_count == 1 { "" } else { "s" }
         );
@@ -156,7 +160,7 @@ pub fn handle(args: SearchArgs, registry: &PluginRegistry) -> ZlResult<()> {
             let tag_str = if entry.tag.is_empty() {
                 String::new()
             } else {
-                format!(" [{}]", entry.tag)
+                format!(" {}", style(format!("[{}]", entry.tag)).dim())
             };
 
             // Truncate description to 55 chars
@@ -166,9 +170,23 @@ pub fn handle(args: SearchArgs, registry: &PluginRegistry) -> ZlResult<()> {
                 entry.candidate.description.clone()
             };
 
+            let name_styled = if entry.score == 100 {
+                style(format!("{:<30}", entry.candidate.name))
+                    .green()
+                    .bold()
+                    .to_string()
+            } else {
+                style(format!("{:<30}", entry.candidate.name))
+                    .white()
+                    .to_string()
+            };
+
             println!(
-                "  {:<30} {:<15} {}{}",
-                entry.candidate.name, entry.candidate.version, desc, tag_str
+                "  {} {:<15} {}{}",
+                name_styled,
+                style(&entry.candidate.version).yellow(),
+                desc,
+                tag_str
             );
         }
 

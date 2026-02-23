@@ -1,6 +1,8 @@
 use std::collections::HashSet;
 use std::path::Path;
 
+use console::style;
+
 use crate::core::db::ops::ZlDatabase;
 use crate::error::{ZlError, ZlResult};
 use crate::plugin::{PackageCandidate, PluginRegistry, SourcePlugin};
@@ -51,6 +53,9 @@ fn strip_version_constraint(dep: &str) -> &str {
 
 /// Resolve a package and all its transitive dependencies.
 /// Returns an InstallPlan with packages in dependency-first order.
+///
+/// When a dependency is not found in the primary source, queries all other
+/// registered plugins and lets the user choose where to install it from.
 pub fn resolve_with_deps(
     name: &str,
     version: Option<&str>,
@@ -84,6 +89,7 @@ pub fn resolve_with_deps(
         true,
         plugin,
         db,
+        registry,
         profile,
         &mut resolved,
         &mut resolving_stack,
@@ -105,6 +111,7 @@ fn resolve_recursive(
     explicit: bool,
     plugin: &dyn SourcePlugin,
     db: &ZlDatabase,
+    registry: &PluginRegistry,
     profile: &SystemProfile,
     resolved: &mut HashSet<String>,
     resolving_stack: &mut Vec<String>,
@@ -169,14 +176,15 @@ fn resolve_recursive(
             continue;
         }
 
-        // Try to resolve the dependency via the plugin
+        // Try to resolve the dependency via the primary plugin
         match plugin.resolve(dep_name, None)? {
             Some(dep_candidate) => {
                 resolve_recursive(
                     &dep_candidate,
-                    false, // dependencies are implicit
+                    false,
                     plugin,
                     db,
+                    registry,
                     profile,
                     resolved,
                     resolving_stack,
@@ -186,8 +194,25 @@ fn resolve_recursive(
                 )?;
             }
             None => {
-                // Dependency not found in this source — track but don't fail
-                if !unresolvable.contains(&dep_str.to_string()) {
+                // Cross-source resolution: try other plugins
+                if let Some(cross_candidate) =
+                    try_cross_source_resolve(dep_name, plugin.name(), registry)?
+                {
+                    let cross_plugin = registry.get(&cross_candidate.source).unwrap_or(plugin);
+                    resolve_recursive(
+                        &cross_candidate,
+                        false,
+                        cross_plugin,
+                        db,
+                        registry,
+                        profile,
+                        resolved,
+                        resolving_stack,
+                        plan,
+                        unresolvable,
+                        already_installed,
+                    )?;
+                } else if !unresolvable.contains(&dep_str.to_string()) {
                     unresolvable.push(dep_str.clone());
                 }
             }
@@ -203,6 +228,75 @@ fn resolve_recursive(
 
     resolving_stack.pop();
     Ok(())
+}
+
+/// Try to resolve a dependency from other sources when the primary source fails.
+/// Presents the user with options if found in multiple sources.
+fn try_cross_source_resolve(
+    dep_name: &str,
+    primary_source: &str,
+    registry: &PluginRegistry,
+) -> ZlResult<Option<PackageCandidate>> {
+    let mut found: Vec<(String, PackageCandidate)> = Vec::new();
+
+    for plugin in registry.all() {
+        if plugin.name() == primary_source {
+            continue;
+        }
+        match plugin.resolve(dep_name, None) {
+            Ok(Some(candidate)) => {
+                found.push((plugin.name().to_string(), candidate));
+            }
+            _ => continue,
+        }
+    }
+
+    match found.len() {
+        0 => Ok(None),
+        1 => {
+            let (source, candidate) = found.into_iter().next().unwrap();
+            eprintln!(
+                "  {} Dependency '{}' not in primary source, found in {}",
+                style("~").yellow(),
+                dep_name,
+                style(&source).cyan()
+            );
+            Ok(Some(candidate))
+        }
+        _ => {
+            // Multiple sources — let user choose
+            eprintln!(
+                "\n  {} Dependency '{}' not in primary source, found in {} other source(s):",
+                style("?").yellow().bold(),
+                style(dep_name).bold(),
+                found.len()
+            );
+
+            let items: Vec<String> = found
+                .iter()
+                .map(|(source, c)| format!("{} {} [{}]", c.name, c.version, source))
+                .collect();
+
+            // Add "skip" option
+            let mut all_items: Vec<&str> = items.iter().map(|s| s.as_str()).collect();
+            all_items.push("Skip (don't install this dependency)");
+
+            let selection =
+                dialoguer::Select::with_theme(&dialoguer::theme::ColorfulTheme::default())
+                    .with_prompt(format!("Install '{}' from", dep_name))
+                    .items(&all_items)
+                    .default(0)
+                    .interact()
+                    .unwrap_or(all_items.len() - 1); // default to skip on error
+
+            if selection >= found.len() {
+                Ok(None) // user chose skip
+            } else {
+                let (_, candidate) = found.into_iter().nth(selection).unwrap();
+                Ok(Some(candidate))
+            }
+        }
+    }
 }
 
 /// Display the install plan to the user
