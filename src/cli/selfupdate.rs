@@ -70,7 +70,8 @@ pub fn handle() -> ZlResult<()> {
 
     if !response.status().is_success() {
         let msg = if response.status().as_u16() == 404 {
-            "No releases found on GitHub — check that the repository has published releases".to_string()
+            "No releases found on GitHub — check that the repository has published releases"
+                .to_string()
         } else {
             format!(
                 "GitHub API returned status {}: check your internet connection or try again later",

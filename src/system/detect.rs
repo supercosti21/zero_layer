@@ -5,7 +5,7 @@ use std::path::Path;
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SystemLayout {
     /// Standard FHS with separate /bin, /lib, /usr/bin, /usr/lib
-    FHS,
+    Fhs,
     /// Merged /usr: /bin → /usr/bin, /lib → /usr/lib (most modern distros)
     MergedUsr,
     /// NixOS: everything in /nix/store, declarative system
@@ -23,7 +23,7 @@ pub enum SystemLayout {
 impl fmt::Display for SystemLayout {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = match self {
-            SystemLayout::FHS => "FHS",
+            SystemLayout::Fhs => "FHS",
             SystemLayout::MergedUsr => "Merged /usr",
             SystemLayout::NixOS => "NixOS",
             SystemLayout::Guix => "GNU Guix",
@@ -36,9 +36,9 @@ impl fmt::Display for SystemLayout {
 }
 
 impl SystemLayout {
-    pub fn from_str(s: &str) -> Self {
+    pub fn parse(s: &str) -> Self {
         match s.to_lowercase().as_str() {
-            "fhs" => SystemLayout::FHS,
+            "fhs" => SystemLayout::Fhs,
             "merged" | "merged_usr" | "mergedusr" => SystemLayout::MergedUsr,
             "nixos" | "nix" => SystemLayout::NixOS,
             "guix" => SystemLayout::Guix,
@@ -82,7 +82,7 @@ pub fn detect_layout() -> SystemLayout {
     }
 
     // Default: standard FHS
-    SystemLayout::FHS
+    SystemLayout::Fhs
 }
 
 /// Check if `link` is a symlink pointing to `target` (directly or via canonical path).
@@ -146,9 +146,9 @@ mod tests {
 
     #[test]
     fn test_layout_from_str() {
-        assert_eq!(SystemLayout::from_str("fhs"), SystemLayout::FHS);
-        assert_eq!(SystemLayout::from_str("nixos"), SystemLayout::NixOS);
-        assert_eq!(SystemLayout::from_str("merged"), SystemLayout::MergedUsr);
-        assert_eq!(SystemLayout::from_str("termux"), SystemLayout::Termux);
+        assert_eq!(SystemLayout::parse("fhs"), SystemLayout::Fhs);
+        assert_eq!(SystemLayout::parse("nixos"), SystemLayout::NixOS);
+        assert_eq!(SystemLayout::parse("merged"), SystemLayout::MergedUsr);
+        assert_eq!(SystemLayout::parse("termux"), SystemLayout::Termux);
     }
 }

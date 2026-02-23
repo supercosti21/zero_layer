@@ -4,6 +4,7 @@ use crate::error::ZlResult;
 #[derive(Debug, Clone)]
 pub struct Mirror {
     pub url: String,
+    #[allow(dead_code)]
     pub country: Option<String>,
 }
 

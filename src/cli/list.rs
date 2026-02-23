@@ -40,8 +40,8 @@ pub fn handle(args: ListArgs, db: &ZlDatabase) -> ZlResult<()> {
         pinned_list.into_iter().map(|(name, _)| name).collect();
 
     println!(
-        "{:<30} {:<20} {:<15} {:>6} {}",
-        "Name", "Version", "Source", "Files", "Status"
+        "{:<30} {:<20} {:<15} {:>6} Status",
+        "Name", "Version", "Source", "Files"
     );
     println!("{}", "-".repeat(85));
 

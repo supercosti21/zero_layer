@@ -25,8 +25,8 @@ pub struct PacmanPlugin {
     repos: Vec<String>,
 }
 
-impl PacmanPlugin {
-    pub fn new() -> Self {
+impl Default for PacmanPlugin {
+    fn default() -> Self {
         Self {
             mirrors: Vec::new(),
             db_cache: RwLock::new(Vec::new()),
@@ -34,6 +34,12 @@ impl PacmanPlugin {
             arch: DEFAULT_ARCH.to_string(),
             repos: DEFAULT_REPOS.iter().map(|s| s.to_string()).collect(),
         }
+    }
+}
+
+impl PacmanPlugin {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     fn primary_mirror(&self) -> ZlResult<&Mirror> {
@@ -176,12 +182,12 @@ impl SourcePlugin for PacmanPlugin {
         }
 
         // Fall back to checking provides (virtual packages)
-        if version.is_none() {
-            if let Some((repo, entry)) = self.find_by_provides(name) {
-                let mirror = self.primary_mirror()?;
-                tracing::debug!("Resolved '{}' via provides from '{}'", name, entry.name);
-                return Ok(Some(database::entry_to_candidate(&entry, mirror, &repo)));
-            }
+        if version.is_none()
+            && let Some((repo, entry)) = self.find_by_provides(name)
+        {
+            let mirror = self.primary_mirror()?;
+            tracing::debug!("Resolved '{}' via provides from '{}'", name, entry.name);
+            return Ok(Some(database::entry_to_candidate(&entry, mirror, &repo)));
         }
 
         Ok(None)

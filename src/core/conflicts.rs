@@ -30,12 +30,12 @@ pub enum Conflict {
         new_package: String,
     },
     /// The candidate's `conflicts` field lists an installed package.
-    DeclaredConflict {
+    Declared {
         package: String,
         conflicts_with: String,
     },
     /// A dependency version constraint cannot be satisfied by the installed version.
-    VersionConflict {
+    Version {
         dependency: String,
         required_by: String,
         required_version: String,
@@ -73,14 +73,14 @@ impl fmt::Display for Conflict {
                 "library conflict: '{soname}' is provided by '{existing_package}', \
                  also provided by '{new_package}'"
             ),
-            Conflict::DeclaredConflict {
+            Conflict::Declared {
                 package,
                 conflicts_with,
             } => write!(
                 f,
                 "declared conflict: '{package}' conflicts with installed '{conflicts_with}'"
             ),
-            Conflict::VersionConflict {
+            Conflict::Version {
                 dependency,
                 required_by,
                 required_version,
@@ -159,7 +159,7 @@ pub fn check_conflicts(
             // Check if the candidate declares a conflict with this installed package
             for conflict_pattern in &candidate.conflicts {
                 if matches_package_name(conflict_pattern, installed_name) {
-                    conflicts.push(Conflict::DeclaredConflict {
+                    conflicts.push(Conflict::Declared {
                         package: new_key.clone(),
                         conflicts_with: format!(
                             "{}-{}",
@@ -177,15 +177,15 @@ pub fn check_conflicts(
             let (dep_name, constraint) = parse_dependency_spec(dep_spec);
             if let Some(constraint) = constraint {
                 // Look up installed version of this dependency
-                if let Some(installed_dep) = db.get_package_by_name(dep_name)? {
-                    if !satisfies_constraint(&installed_dep.id.version, constraint) {
-                        conflicts.push(Conflict::VersionConflict {
-                            dependency: dep_name.to_string(),
-                            required_by: new_key.clone(),
-                            required_version: constraint.to_string(),
-                            installed_version: installed_dep.id.version.clone(),
-                        });
-                    }
+                if let Some(installed_dep) = db.get_package_by_name(dep_name)?
+                    && !satisfies_constraint(&installed_dep.id.version, constraint)
+                {
+                    conflicts.push(Conflict::Version {
+                        dependency: dep_name.to_string(),
+                        required_by: new_key.clone(),
+                        required_version: constraint.to_string(),
+                        installed_version: installed_dep.id.version.clone(),
+                    });
                 }
             }
         }
@@ -228,14 +228,14 @@ fn scan_dir_for_ownership_conflicts(
     for entry in walker {
         if entry.file_type().is_file() || entry.file_type().is_symlink() {
             let path_str = entry.path().to_string_lossy().to_string();
-            if let Some(owner) = db.file_owner(&path_str)? {
-                if owner != new_key {
-                    conflicts.push(Conflict::FileOwnership {
-                        path: path_str,
-                        existing_owner: owner,
-                        new_package: new_key.to_string(),
-                    });
-                }
+            if let Some(owner) = db.file_owner(&path_str)?
+                && owner != new_key
+            {
+                conflicts.push(Conflict::FileOwnership {
+                    path: path_str,
+                    existing_owner: owner,
+                    new_package: new_key.to_string(),
+                });
             }
         }
     }
@@ -260,14 +260,14 @@ fn check_binary_conflicts(
         if let Ok(target) = std::fs::read_link(&bin_path) {
             let target_str = target.to_string_lossy();
             // Package dirs are named "name-version" under packages/
-            if let Some(owner) = extract_package_key_from_path(&target_str) {
-                if owner != new_key {
-                    conflicts.push(Conflict::BinaryName {
-                        name: candidate.name.clone(),
-                        existing_package: owner,
-                        new_package: new_key.to_string(),
-                    });
-                }
+            if let Some(owner) = extract_package_key_from_path(&target_str)
+                && owner != new_key
+            {
+                conflicts.push(Conflict::BinaryName {
+                    name: candidate.name.clone(),
+                    existing_package: owner,
+                    new_package: new_key.to_string(),
+                });
             }
         } else {
             // Not a symlink but a regular file — still a conflict
@@ -282,18 +282,18 @@ fn check_binary_conflicts(
     // Also check the `provides` list: each provided name gets a symlink in bin/
     for provided in &candidate.provides {
         let provided_bin = paths.bin.join(provided);
-        if provided_bin.symlink_metadata().is_ok() {
-            if let Ok(target) = std::fs::read_link(&provided_bin) {
-                let target_str = target.to_string_lossy();
-                if let Some(owner) = extract_package_key_from_path(&target_str) {
-                    if owner != new_key {
-                        conflicts.push(Conflict::BinaryName {
-                            name: provided.clone(),
-                            existing_package: owner,
-                            new_package: new_key.to_string(),
-                        });
-                    }
-                }
+        if provided_bin.symlink_metadata().is_ok()
+            && let Ok(target) = std::fs::read_link(&provided_bin)
+        {
+            let target_str = target.to_string_lossy();
+            if let Some(owner) = extract_package_key_from_path(&target_str)
+                && owner != new_key
+            {
+                conflicts.push(Conflict::BinaryName {
+                    name: provided.clone(),
+                    existing_package: owner,
+                    new_package: new_key.to_string(),
+                });
             }
         }
     }
@@ -312,16 +312,15 @@ fn check_library_conflicts(
     // Check if any soname provided by the candidate is already provided by another package
     for provided in &candidate.provides {
         // Library provides are typically sonames like "libfoo.so.3"
-        if provided.contains(".so") {
-            if let Some(existing_provider) = db.lib_provider(provided)? {
-                if existing_provider != new_key {
-                    conflicts.push(Conflict::LibrarySoname {
-                        soname: provided.clone(),
-                        existing_package: existing_provider,
-                        new_package: new_key.to_string(),
-                    });
-                }
-            }
+        if provided.contains(".so")
+            && let Some(existing_provider) = db.lib_provider(provided)?
+            && existing_provider != new_key
+        {
+            conflicts.push(Conflict::LibrarySoname {
+                soname: provided.clone(),
+                existing_package: existing_provider,
+                new_package: new_key.to_string(),
+            });
         }
     }
     Ok(())
@@ -376,16 +375,16 @@ pub fn satisfies_constraint(version: &str, constraint: &str) -> bool {
         return true;
     }
 
-    let (op, req_version) = if constraint.starts_with(">=") {
-        (">=", constraint[2..].trim())
-    } else if constraint.starts_with("<=") {
-        ("<=", constraint[2..].trim())
-    } else if constraint.starts_with('>') {
-        (">", constraint[1..].trim())
-    } else if constraint.starts_with('<') {
-        ("<", constraint[1..].trim())
-    } else if constraint.starts_with('=') {
-        ("=", constraint[1..].trim())
+    let (op, req_version) = if let Some(rest) = constraint.strip_prefix(">=") {
+        (">=", rest.trim())
+    } else if let Some(rest) = constraint.strip_prefix("<=") {
+        ("<=", rest.trim())
+    } else if let Some(rest) = constraint.strip_prefix('>') {
+        (">", rest.trim())
+    } else if let Some(rest) = constraint.strip_prefix('<') {
+        ("<", rest.trim())
+    } else if let Some(rest) = constraint.strip_prefix('=') {
+        ("=", rest.trim())
     } else {
         // No recognised operator — treat as exact match
         ("=", constraint)
@@ -438,10 +437,10 @@ fn compare_versions(a: &str, b: &str) -> std::cmp::Ordering {
 fn extract_package_key_from_path(path: &str) -> Option<String> {
     let parts: Vec<&str> = path.split('/').collect();
     for (i, part) in parts.iter().enumerate() {
-        if *part == "packages" {
-            if let Some(key) = parts.get(i + 1) {
-                return Some(key.to_string());
-            }
+        if *part == "packages"
+            && let Some(key) = parts.get(i + 1)
+        {
+            return Some(key.to_string());
         }
     }
     None
@@ -645,7 +644,7 @@ mod tests {
         assert!(report.has_conflicts());
         assert_eq!(report.conflicts.len(), 1);
         match &report.conflicts[0] {
-            Conflict::DeclaredConflict {
+            Conflict::Declared {
                 package,
                 conflicts_with,
             } => {
@@ -684,7 +683,7 @@ mod tests {
         assert!(report.has_conflicts());
         assert_eq!(report.conflicts.len(), 1);
         match &report.conflicts[0] {
-            Conflict::VersionConflict {
+            Conflict::Version {
                 dependency,
                 required_by,
                 required_version,
@@ -774,7 +773,7 @@ mod tests {
     #[test]
     fn test_conflict_report_display() {
         let report = ConflictReport {
-            conflicts: vec![Conflict::DeclaredConflict {
+            conflicts: vec![Conflict::Declared {
                 package: "a-1.0".into(),
                 conflicts_with: "b-2.0".into(),
             }],

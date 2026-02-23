@@ -2,15 +2,13 @@ use crate::core::db::ops::ZlDatabase;
 use crate::error::{ZlError, ZlResult};
 use crate::paths::ZlPaths;
 
-use super::RemoveArgs;
+use super::{AppContext, RemoveArgs};
 
-pub fn handle(
-    args: RemoveArgs,
-    paths: &ZlPaths,
-    db: &ZlDatabase,
-    auto_yes: bool,
-    dry_run: bool,
-) -> ZlResult<()> {
+pub fn handle(args: RemoveArgs, ctx: &AppContext) -> ZlResult<()> {
+    let paths = ctx.paths;
+    let db = ctx.db;
+    let auto_yes = ctx.auto_yes;
+    let dry_run = ctx.dry_run;
     // If a specific version was requested, remove only that version
     if let Some(ref version) = args.version {
         return remove_specific_version(
@@ -91,7 +89,7 @@ pub fn handle(
     remove_bin_symlinks(&node.installed_files, &paths.bin)?;
 
     // 4. Remove lib symlinks
-    for (soname, _) in &node.provides_libs {
+    for soname in node.provides_libs.keys() {
         let link_path = paths.lib.join(soname);
         if link_path.symlink_metadata().is_ok() {
             std::fs::remove_file(&link_path)?;
@@ -199,7 +197,7 @@ fn remove_single(
 
     remove_bin_symlinks(&node.installed_files, &paths.bin)?;
 
-    for (soname, _) in &node.provides_libs {
+    for soname in node.provides_libs.keys() {
         let link_path = paths.lib.join(soname);
         if link_path.symlink_metadata().is_ok() {
             std::fs::remove_file(&link_path)?;
@@ -234,18 +232,18 @@ fn remove_bin_symlinks(
     for entry in entries {
         let entry = entry?;
         let path = entry.path();
-        if path.symlink_metadata().is_ok() {
-            if let Ok(target) = std::fs::read_link(&path) {
-                // Check if symlink target belongs to this package
-                for installed in installed_files {
-                    if target == *installed || target.starts_with(installed) {
-                        std::fs::remove_file(&path)?;
-                        tracing::debug!(
-                            "Removed bin symlink: {}",
-                            entry.file_name().to_string_lossy()
-                        );
-                        break;
-                    }
+        if path.symlink_metadata().is_ok()
+            && let Ok(target) = std::fs::read_link(&path)
+        {
+            // Check if symlink target belongs to this package
+            for installed in installed_files {
+                if target == *installed || target.starts_with(installed) {
+                    std::fs::remove_file(&path)?;
+                    tracing::debug!(
+                        "Removed bin symlink: {}",
+                        entry.file_name().to_string_lossy()
+                    );
+                    break;
                 }
             }
         }
@@ -307,7 +305,7 @@ fn remove_orphans(paths: &ZlPaths, db: &ZlDatabase) -> ZlResult<()> {
         println!("  - {}-{}", orphan.id.name, orphan.id.version);
 
         // Remove lib symlinks
-        for (soname, _) in &orphan.provides_libs {
+        for soname in orphan.provides_libs.keys() {
             let link_path = paths.lib.join(soname);
             if link_path.symlink_metadata().is_ok() {
                 std::fs::remove_file(&link_path)?;

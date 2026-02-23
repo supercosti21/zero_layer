@@ -1,34 +1,22 @@
-use crate::core::db::ops::ZlDatabase;
 use crate::error::{ZlError, ZlResult};
-use crate::paths::ZlPaths;
-use crate::plugin::PluginRegistry;
-use crate::system::SystemProfile;
 
-use super::{RemoveArgs, UpdateArgs};
+use super::{AppContext, RemoveArgs, UpdateArgs};
 
-pub fn handle(
-    args: UpdateArgs,
-    paths: &ZlPaths,
-    db: &ZlDatabase,
-    registry: &PluginRegistry,
-    profile: &SystemProfile,
-    _auto_yes: bool,
-    dry_run: bool,
-    skip_verify: bool,
-) -> ZlResult<()> {
-    if dry_run {
+pub fn handle(args: UpdateArgs, ctx: &AppContext) -> ZlResult<()> {
+    if ctx.dry_run {
         println!("[DRY-RUN] Simulating update...");
     }
 
     // Get list of packages to update
     let packages = match args.package {
         Some(ref name) => {
-            let pkg = db
+            let pkg = ctx
+                .db
                 .get_package_by_name(name)?
                 .ok_or_else(|| ZlError::PackageNotFound { name: name.clone() })?;
             vec![pkg]
         }
-        None => db.list_packages()?,
+        None => ctx.db.list_packages()?,
     };
 
     if packages.is_empty() {
@@ -37,7 +25,7 @@ pub fn handle(
     }
 
     // Sync all plugins first
-    for plugin in registry.all() {
+    for plugin in ctx.registry.all() {
         if let Err(e) = plugin.sync() {
             tracing::warn!("Failed to sync {}: {}", plugin.name(), e);
         }
@@ -53,7 +41,7 @@ pub fn handle(
         }
 
         // Skip pinned packages
-        if db.is_pinned(&pkg.id.name)? {
+        if ctx.db.is_pinned(&pkg.id.name)? {
             tracing::info!("{} is pinned, skipping update", pkg.id.name);
             skipped_pinned += 1;
             continue;
@@ -61,7 +49,7 @@ pub fn handle(
 
         // Find the plugin that manages this package
         let source_name = pkg.id.source.split('/').next().unwrap_or(&pkg.id.source);
-        let plugin = match registry.get(source_name) {
+        let plugin = match ctx.registry.get(source_name) {
             Some(p) => p,
             None => {
                 tracing::warn!("No plugin found for source '{}', skipping", pkg.id.source);
@@ -77,7 +65,7 @@ pub fn handle(
                     pkg.id.name, pkg.id.version, candidate.version
                 );
 
-                if dry_run {
+                if ctx.dry_run {
                     updated += 1;
                     continue;
                 }
@@ -88,17 +76,17 @@ pub fn handle(
                     cascade: false,
                     version: Some(pkg.id.version.clone()),
                 };
-                super::remove::handle(remove_args, paths, db, true, false)?;
+                super::remove::handle(remove_args, ctx)?;
 
                 // Install new version directly (skip dep resolution for updates)
                 super::install::install_single_package(
                     &candidate,
                     true, // maintain explicit status
-                    paths,
-                    db,
+                    ctx.paths,
+                    ctx.db,
                     plugin,
-                    profile,
-                    skip_verify,
+                    ctx.profile,
+                    ctx.skip_verify,
                 )?;
 
                 updated += 1;
@@ -112,7 +100,7 @@ pub fn handle(
         }
     }
 
-    if dry_run {
+    if ctx.dry_run {
         if updated == 0 {
             println!("[DRY-RUN] All packages are up to date.");
         } else {

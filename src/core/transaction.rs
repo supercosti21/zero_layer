@@ -11,6 +11,7 @@ use crate::core::db::ops::ZlDatabase;
 /// If a `Transaction` is dropped without calling `commit()`, the `Drop` impl
 /// will log a warning. It does **not** auto-rollback because it doesn't have a
 /// reference to the database — call `rollback()` explicitly when you have one.
+#[derive(Default)]
 pub struct Transaction {
     created_files: Vec<PathBuf>,
     created_dirs: Vec<PathBuf>,
@@ -22,13 +23,7 @@ pub struct Transaction {
 impl Transaction {
     /// Create a new, empty transaction.
     pub fn new() -> Self {
-        Self {
-            created_files: Vec::new(),
-            created_dirs: Vec::new(),
-            created_symlinks: Vec::new(),
-            db_package_keys: Vec::new(),
-            committed: false,
-        }
+        Self::default()
     }
 
     // ── Tracking methods ──
@@ -91,19 +86,19 @@ impl Transaction {
 
         // 2. Remove symlinks in reverse
         for path in self.created_symlinks.iter().rev() {
-            if path.symlink_metadata().is_ok() {
-                if let Err(e) = std::fs::remove_file(path) {
-                    error!("rollback: failed to remove symlink {}: {e}", path.display());
-                }
+            if path.symlink_metadata().is_ok()
+                && let Err(e) = std::fs::remove_file(path)
+            {
+                error!("rollback: failed to remove symlink {}: {e}", path.display());
             }
         }
 
         // 3. Remove files in reverse
         for path in self.created_files.iter().rev() {
-            if path.exists() {
-                if let Err(e) = std::fs::remove_file(path) {
-                    error!("rollback: failed to remove file {}: {e}", path.display());
-                }
+            if path.exists()
+                && let Err(e) = std::fs::remove_file(path)
+            {
+                error!("rollback: failed to remove file {}: {e}", path.display());
             }
         }
 
@@ -123,22 +118,27 @@ impl Transaction {
 
     // ── Accessors (useful for tests and diagnostics) ──
 
+    #[cfg(test)]
     pub fn created_files(&self) -> &[PathBuf] {
         &self.created_files
     }
 
+    #[cfg(test)]
     pub fn created_dirs(&self) -> &[PathBuf] {
         &self.created_dirs
     }
 
+    #[cfg(test)]
     pub fn created_symlinks(&self) -> &[PathBuf] {
         &self.created_symlinks
     }
 
+    #[cfg(test)]
     pub fn db_package_keys(&self) -> &[String] {
         &self.db_package_keys
     }
 
+    #[cfg(test)]
     pub fn is_committed(&self) -> bool {
         self.committed
     }

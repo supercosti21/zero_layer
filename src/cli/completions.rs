@@ -13,6 +13,7 @@ pub fn handle(args: CompletionsArgs) -> ZlResult<()> {
 }
 
 /// Print usage instructions for installing shell completions
+#[allow(dead_code)]
 pub fn print_instructions(shell: Shell) {
     match shell {
         Shell::Bash => {

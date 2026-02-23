@@ -56,8 +56,8 @@ pub struct GithubPlugin {
     client: reqwest::blocking::Client,
 }
 
-impl GithubPlugin {
-    pub fn new() -> Self {
+impl Default for GithubPlugin {
+    fn default() -> Self {
         Self {
             token: None,
             cache_dir: PathBuf::new(),
@@ -67,15 +67,27 @@ impl GithubPlugin {
                 .unwrap_or_default(),
         }
     }
+}
+
+impl GithubPlugin {
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     fn get<T: serde::de::DeserializeOwned>(&self, url: &str) -> ZlResult<T> {
-        let mut req = self.client.get(url).timeout(std::time::Duration::from_secs(30));
+        let mut req = self
+            .client
+            .get(url)
+            .timeout(std::time::Duration::from_secs(30));
 
         if let Some(ref token) = self.token {
             req = req.header("Authorization", format!("Bearer {}", token));
         }
 
-        let resp = req.send()?;
+        let resp = req.send().map_err(|e| ZlError::Plugin {
+            plugin: "github".into(),
+            message: format!("GitHub API request failed: {}", e),
+        })?;
 
         if resp.status() == reqwest::StatusCode::NOT_FOUND {
             return Err(ZlError::PackageNotFound {
@@ -105,7 +117,11 @@ impl GithubPlugin {
         })
     }
 
-    fn release_to_candidate(&self, owner_repo: &str, release: &GhRelease) -> ZlResult<PackageCandidate> {
+    fn release_to_candidate(
+        &self,
+        owner_repo: &str,
+        release: &GhRelease,
+    ) -> ZlResult<PackageCandidate> {
         let asset = pick_best_asset(&release.assets).ok_or_else(|| ZlError::Plugin {
             plugin: "github".into(),
             message: format!(
@@ -113,13 +129,22 @@ impl GithubPlugin {
                 owner_repo,
                 release.tag_name,
                 std::env::consts::ARCH,
-                release.assets.iter().map(|a| a.name.as_str()).collect::<Vec<_>>().join(", ")
+                release
+                    .assets
+                    .iter()
+                    .map(|a| a.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ),
         })?;
 
         // Strip leading "v" from tag for the version field
         let version = release.tag_name.trim_start_matches('v').to_string();
-        let name = owner_repo.split('/').last().unwrap_or(owner_repo).to_string();
+        let name = owner_repo
+            .rsplit('/')
+            .next()
+            .unwrap_or(owner_repo)
+            .to_string();
 
         Ok(PackageCandidate {
             name,
@@ -180,10 +205,10 @@ impl SourcePlugin for GithubPlugin {
         for repo in &resp.items {
             // Try to get the latest release for each result
             let rel_url = format!("{}/repos/{}/releases/latest", GITHUB_API, repo.full_name);
-            if let Ok(release) = self.get::<GhRelease>(&rel_url) {
-                if let Ok(candidate) = self.release_to_candidate(&repo.full_name, &release) {
-                    candidates.push(candidate);
-                }
+            if let Ok(release) = self.get::<GhRelease>(&rel_url)
+                && let Ok(candidate) = self.release_to_candidate(&repo.full_name, &release)
+            {
+                candidates.push(candidate);
             }
         }
 
@@ -235,7 +260,8 @@ impl SourcePlugin for GithubPlugin {
             if attempt > 1 {
                 tracing::info!("Retry {}/3 for {}", attempt, filename);
             }
-            let mut req = self.client
+            let mut req = self
+                .client
                 .get(url)
                 .timeout(std::time::Duration::from_secs(600));
 
@@ -257,11 +283,11 @@ impl SourcePlugin for GithubPlugin {
                 });
             }
 
-            Ok(resp.bytes().map_err(|e| ZlError::DownloadFailed {
+            resp.bytes().map_err(|e| ZlError::DownloadFailed {
                 url: url.to_string(),
                 attempts: attempt,
                 message: e.to_string(),
-            })?)
+            })
         })?;
 
         std::fs::write(&dest_path, &bytes)?;
@@ -321,7 +347,9 @@ fn pick_best_asset(assets: &[GhAsset]) -> Option<&GhAsset> {
         // Must match current architecture (or be "any"/"all")
         let arch_match = arch_patterns.iter().any(|p| name_lower.contains(p))
             || name_lower.contains("linux-unknown")
-            || (!name_lower.contains("x86") && !name_lower.contains("aarch") && !name_lower.contains("arm"));
+            || (!name_lower.contains("x86")
+                && !name_lower.contains("aarch")
+                && !name_lower.contains("arm"));
 
         if !arch_match {
             continue;
@@ -342,9 +370,7 @@ fn pick_best_asset(assets: &[GhAsset]) -> Option<&GhAsset> {
         // Prefer compressed archives over bare binaries
         if name_lower.ends_with(".tar.gz") || name_lower.ends_with(".tgz") {
             score -= 4;
-        } else if name_lower.ends_with(".tar.xz") {
-            score -= 3;
-        } else if name_lower.ends_with(".tar.zst") {
+        } else if name_lower.ends_with(".tar.xz") || name_lower.ends_with(".tar.zst") {
             score -= 3;
         } else if name_lower.ends_with(".zip") {
             score -= 2;
@@ -353,7 +379,7 @@ fn pick_best_asset(assets: &[GhAsset]) -> Option<&GhAsset> {
         }
         // Bare binary stays at 0 bonus
 
-        if best.map_or(true, |(_, best_score)| score < best_score) {
+        if best.is_none_or(|(_, best_score)| score < best_score) {
             best = Some((asset, score));
         }
     }
@@ -424,7 +450,8 @@ fn extract_zip(archive: &Path, dest: &Path) -> ZlResult<()> {
         .map_err(|e| ZlError::Archive(format!("zip open failed: {}", e)))?;
 
     for i in 0..zip.len() {
-        let mut entry = zip.by_index(i)
+        let mut entry = zip
+            .by_index(i)
             .map_err(|e| ZlError::Archive(format!("zip entry error: {}", e)))?;
         let outpath = dest.join(entry.name());
 
@@ -547,7 +574,10 @@ fn classify_extracted(
 fn is_script(path: &Path) -> bool {
     if let Some(ext) = path.extension() {
         let ext = ext.to_string_lossy();
-        if matches!(ext.as_ref(), "sh" | "bash" | "py" | "pl" | "rb" | "lua" | "fish") {
+        if matches!(
+            ext.as_ref(),
+            "sh" | "bash" | "py" | "pl" | "rb" | "lua" | "fish"
+        ) {
             return true;
         }
     }

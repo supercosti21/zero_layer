@@ -22,6 +22,7 @@ pub struct SystemProfile {
     /// CPU architecture
     pub arch: Arch,
     /// Whether the system is 64-bit
+    #[allow(dead_code)]
     pub is_64bit: bool,
     /// Kernel page size (for ELF patching)
     pub page_size: u64,
@@ -93,7 +94,7 @@ impl SystemProfile {
         }
 
         if let Some(ref layout_str) = config.layout {
-            self.layout = SystemLayout::from_str(layout_str);
+            self.layout = SystemLayout::parse(layout_str);
             tracing::info!("Layout overridden to: {}", self.layout);
         }
 
@@ -112,6 +113,7 @@ impl SystemProfile {
     }
 
     /// Find the full path of a system library, or None.
+    #[allow(dead_code)]
     pub fn find_system_lib(&self, lib_name: &str) -> Option<PathBuf> {
         for dir in &self.lib_dirs {
             let path = dir.join(lib_name);

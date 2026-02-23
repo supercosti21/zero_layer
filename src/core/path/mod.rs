@@ -9,12 +9,15 @@ use crate::system::SystemProfile;
 #[derive(Debug, Clone)]
 pub struct PathMapping {
     /// ZL root directory
+    #[allow(dead_code)]
     pub zl_root: PathBuf,
     /// Package-specific install prefix
+    #[allow(dead_code)]
     pub pkg_prefix: PathBuf,
     /// Shared library directory
     pub shared_lib_dir: PathBuf,
     /// Shared binary directory
+    #[allow(dead_code)]
     pub shared_bin_dir: PathBuf,
     /// The system's actual ld-linux path
     pub system_interpreter: String,
@@ -82,10 +85,7 @@ impl PathMapping {
 
     /// Compute the RUNPATH string for an ELF binary
     pub fn compute_runpath(&self, _binary_path: &Path, _needed_libs: &[String]) -> Option<String> {
-        let mut paths = Vec::new();
-        paths.push("$ORIGIN".to_string());
-        paths.push(self.shared_lib_dir.to_string_lossy().to_string());
-        Some(paths.join(":"))
+        Some(format!("$ORIGIN:{}", self.shared_lib_dir.to_string_lossy()))
     }
 
     /// Remap an arbitrary FHS path to its ZL equivalent
@@ -99,5 +99,101 @@ impl PathMapping {
             }
         }
         original.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_profile() -> SystemProfile {
+        SystemProfile::detect()
+    }
+
+    #[test]
+    fn test_path_mapping_for_package() {
+        let profile = test_profile();
+        let zl_root = Path::new("/tmp/test-zl");
+        let mapping = PathMapping::for_package(zl_root, "firefox", "120.0", &profile);
+
+        assert_eq!(mapping.zl_root, PathBuf::from("/tmp/test-zl"));
+        assert_eq!(
+            mapping.pkg_prefix,
+            PathBuf::from("/tmp/test-zl/packages/firefox-120.0")
+        );
+        assert_eq!(mapping.shared_lib_dir, PathBuf::from("/tmp/test-zl/lib"));
+        assert_eq!(mapping.shared_bin_dir, PathBuf::from("/tmp/test-zl/bin"));
+        assert!(!mapping.prefix_map.is_empty());
+    }
+
+    #[test]
+    fn test_remap_path_usr_lib() {
+        let profile = test_profile();
+        let zl_root = Path::new("/tmp/test-zl");
+        let mapping = PathMapping::for_package(zl_root, "test", "1.0", &profile);
+
+        let remapped = mapping.remap_path("/usr/lib/libfoo.so");
+        assert!(
+            remapped.starts_with("/tmp/test-zl/lib"),
+            "Expected /usr/lib to remap to ZL lib dir, got: {}",
+            remapped
+        );
+    }
+
+    #[test]
+    fn test_remap_path_usr_bin() {
+        let profile = test_profile();
+        let zl_root = Path::new("/tmp/test-zl");
+        let mapping = PathMapping::for_package(zl_root, "test", "1.0", &profile);
+
+        let remapped = mapping.remap_path("/usr/bin/myprog");
+        assert!(
+            remapped.starts_with("/tmp/test-zl/bin"),
+            "Expected /usr/bin to remap to ZL bin dir, got: {}",
+            remapped
+        );
+    }
+
+    #[test]
+    fn test_remap_path_unknown_stays_unchanged() {
+        let profile = test_profile();
+        let zl_root = Path::new("/tmp/test-zl");
+        let mapping = PathMapping::for_package(zl_root, "test", "1.0", &profile);
+
+        assert_eq!(mapping.remap_path("/opt/custom/path"), "/opt/custom/path");
+    }
+
+    #[test]
+    fn test_remap_interpreter_nonexistent() {
+        let profile = test_profile();
+        let zl_root = Path::new("/tmp/test-zl");
+        let mapping = PathMapping::for_package(zl_root, "test", "1.0", &profile);
+
+        let result = mapping.remap_interpreter("/nonexistent/ld-linux.so.2");
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), profile.interpreter_str());
+    }
+
+    #[test]
+    fn test_remap_interpreter_existing() {
+        let profile = test_profile();
+        let zl_root = Path::new("/tmp/test-zl");
+        let mapping = PathMapping::for_package(zl_root, "test", "1.0", &profile);
+
+        let result = mapping.remap_interpreter(&profile.interpreter_str());
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_compute_runpath() {
+        let profile = test_profile();
+        let zl_root = Path::new("/tmp/test-zl");
+        let mapping = PathMapping::for_package(zl_root, "test", "1.0", &profile);
+
+        let runpath = mapping
+            .compute_runpath(Path::new("/tmp/binary"), &[])
+            .unwrap();
+        assert!(runpath.contains("$ORIGIN"));
+        assert!(runpath.contains("/tmp/test-zl/lib"));
     }
 }

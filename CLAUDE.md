@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Rules
 
-- **Every time you make changes to the codebase**, update this CLAUDE.md file to reflect the new state (architecture, known issues, etc.).
+- **Every time you make changes to the codebase**, update this CLAUDE.md file to reflect the new state (implementation status, module structure, known issues, etc.).
 - **If changes affect user-facing features, architecture, or usage**, also update README.md accordingly.
 
 ## Project Overview
@@ -21,7 +21,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 cargo build                  # Debug build
 cargo build --release        # Release build
 cargo run -- <subcommand>    # Run (e.g., cargo run -- install firefox)
-cargo test                   # Run all tests (154 tests: 74 bin + 80 lib)
+cargo test                   # Run all tests (186 tests: 90 bin + 96 lib)
 cargo test <name>            # Run a single test by name
 cargo test -- --nocapture    # Run tests with stdout visible
 cargo clippy                 # Lint
@@ -29,7 +29,9 @@ cargo fmt                    # Format
 cargo fmt -- --check         # Check formatting without modifying
 ```
 
-There are no integration tests — all tests are unit tests inside `#[cfg(test)]` modules within source files. There is no CI configuration; run `cargo test && cargo clippy && cargo fmt -- --check` locally before committing.
+There are no integration tests — all tests are unit tests inside `#[cfg(test)]` modules within source files.
+
+**CI**: GitHub Actions workflow (`.github/workflows/ci.yml`) runs `cargo fmt --check`, `cargo clippy -- -D warnings`, and `cargo test` on every push to `main` and all PRs.
 
 ## Architecture
 
@@ -79,11 +81,11 @@ Current plugins: `pacman` (Arch repos), `aur` (AUR RPC v5 + makepkg), `apt` (Pac
 
 ### Command dispatch pattern
 
-Each CLI command lives in `src/cli/<command>.rs` with a `pub fn handle(...)` function. The `handle` function receives the parsed args struct plus shared state (`ZlPaths`, `ZlDatabase`, `PluginRegistry`, `SystemProfile`, flags). Commands are dispatched via a `match` in `main.rs`.
+Each CLI command lives in `src/cli/<command>.rs` with a `pub fn handle(...)` function. Most `handle` functions receive the parsed args struct plus an `AppContext` reference (defined in `cli/mod.rs`), which bundles shared state: `ZlPaths`, `ZlDatabase`, `PluginRegistry`, `SystemProfile`, and flags (`auto_yes`, `dry_run`, `skip_verify`). Commands are dispatched via a `match` in `main.rs`.
 
 ### Error handling
 
-- `ZlError` enum in `error.rs` (thiserror) for domain errors with `.suggestion()` hints
+- `ZlError` enum in `error.rs` (thiserror, boxed where needed to keep size small) for domain errors with `.suggestion()` hints
 - `anyhow::Result` at the top level (`run()` returns `anyhow::Result<()>`)
 - `retry_with_backoff()` in `error.rs` for HTTP retries (3 attempts: 1s, 2s, 4s)
 - Tracing: default level `warn`; `-v` = info, `-vv` = debug
@@ -123,6 +125,8 @@ Each CLI command lives in `src/cli/<command>.rs` with a `pub fn handle(...)` fun
 | `sha2` | SHA256 checksums |
 | `indicatif` + `dialoguer` | Progress bars and interactive prompts |
 
-### Known compiler warnings
+### Code quality
 
-There are existing dead-code warnings for `core/build/` (build system support is implemented but not yet wired into any plugin) and a few unused fields/functions in `config.rs` and `cli/completions.rs`. These are expected — the build system will be used by future plugins.
+- **Zero clippy warnings**: `cargo clippy -- -D warnings` passes clean
+- **Zero `cargo fmt` diff**: all code is formatted
+- **186 tests**: comprehensive coverage of core modules (conflicts, ELF, path mapping, DB, graph, transaction, verify, plugins, system detection)

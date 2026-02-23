@@ -8,20 +8,25 @@ pub struct ElfInfo {
     /// Path to the ELF file
     pub path: PathBuf,
     /// Whether this is a dynamically linked executable, shared library, or static
+    #[allow(dead_code)]
     pub elf_type: ElfType,
     /// The PT_INTERP path (e.g., /lib64/ld-linux-x86-64.so.2)
     pub interpreter: Option<String>,
     /// DT_NEEDED entries — shared libraries this binary needs
     pub needed_libs: Vec<String>,
     /// Current RPATH (DT_RPATH)
+    #[allow(dead_code)]
     pub rpath: Option<String>,
     /// Current RUNPATH (DT_RUNPATH)
+    #[allow(dead_code)]
     pub runpath: Option<String>,
     /// SONAME if this is a shared library
     pub soname: Option<String>,
     /// Architecture (e.g., EM_X86_64)
+    #[allow(dead_code)]
     pub machine: u16,
     /// Whether the binary is 64-bit
+    #[allow(dead_code)]
     pub is_64bit: bool,
 }
 
@@ -47,7 +52,7 @@ pub fn analyze(path: &Path) -> ZlResult<ElfInfo> {
     let data = std::fs::read(path)?;
     let elf = Elf::parse(&data).map_err(|e| crate::error::ZlError::ElfAnalysis {
         path: path.to_path_buf(),
-        source: e,
+        source: Box::new(e),
     })?;
 
     let elf_type = match elf.header.e_type {
@@ -114,4 +119,56 @@ pub fn scan_directory(dir: &Path) -> ZlResult<Vec<ElfInfo>> {
         }
     }
     Ok(results)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_elf_file_on_bin_sh() {
+        assert!(is_elf_file(Path::new("/bin/sh")));
+    }
+
+    #[test]
+    fn test_is_elf_file_on_non_elf() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("notelf.txt");
+        std::fs::write(&file, "hello world").unwrap();
+        assert!(!is_elf_file(&file));
+    }
+
+    #[test]
+    fn test_is_elf_file_on_nonexistent() {
+        assert!(!is_elf_file(Path::new("/nonexistent/file")));
+    }
+
+    #[test]
+    fn test_analyze_bin_sh() {
+        let info = analyze(Path::new("/bin/sh")).unwrap();
+        assert_eq!(info.path, PathBuf::from("/bin/sh"));
+        // /bin/sh is typically a PIE executable (ET_DYN with PT_INTERP)
+        assert!(
+            info.elf_type == ElfType::Executable,
+            "Expected executable, got: {:?}",
+            info.elf_type
+        );
+        assert!(
+            info.interpreter.is_some(),
+            "/bin/sh should have a PT_INTERP"
+        );
+        assert!(
+            !info.needed_libs.is_empty(),
+            "/bin/sh should have DT_NEEDED entries"
+        );
+    }
+
+    #[test]
+    fn test_scan_directory_finds_elfs() {
+        let results = scan_directory(Path::new("/bin")).unwrap();
+        assert!(
+            !results.is_empty(),
+            "/bin should contain at least one ELF file"
+        );
+    }
 }

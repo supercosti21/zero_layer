@@ -7,35 +7,15 @@ pub enum ZlError {
     #[error("ELF analysis failed for {path}: {source}")]
     ElfAnalysis {
         path: PathBuf,
-        source: goblin::error::Error,
+        source: Box<goblin::error::Error>,
     },
 
     #[error("ELF patching failed for {path}: {message}")]
     ElfPatch { path: PathBuf, message: String },
 
-    // ── Path remapping ──
-    #[error("Path remapping failed: {0}")]
-    PathRemap(String),
-
     // ── Package resolution ──
     #[error("Package not found: {name}\n  hint: try `zl search {name}` to find available packages")]
     PackageNotFound { name: String },
-
-    #[error("Package already installed: {name}-{version}")]
-    AlreadyInstalled { name: String, version: String },
-
-    // ── Dependencies ──
-    #[error("Dependency resolution failed for {package}: {message}")]
-    DependencyResolution { package: String, message: String },
-
-    #[error("Unresolvable dependencies for {package}:\n{}", format_missing_deps(.missing))]
-    UnresolvableDeps {
-        package: String,
-        missing: Vec<String>,
-    },
-
-    #[error("Dependency cycle detected: {}", .chain.join(" → "))]
-    DependencyCycle { chain: Vec<String> },
 
     #[error("Conflict: {installed} conflicts with {requested}")]
     PackageConflict {
@@ -43,20 +23,7 @@ pub enum ZlError {
         requested: String,
     },
 
-    // ── Database ──
-    #[error("Database error: {source}")]
-    Database {
-        #[from]
-        source: redb::Error,
-    },
-
     // ── Network ──
-    #[error("Network error: {source}")]
-    Network {
-        #[from]
-        source: reqwest::Error,
-    },
-
     #[error("Download failed for {url} after {attempts} attempts: {message}")]
     DownloadFailed {
         url: String,
@@ -96,10 +63,6 @@ pub enum ZlError {
         source: std::io::Error,
     },
 
-    // ── Verification ──
-    #[error("Verification failed:\n{0}")]
-    Verification(String),
-
     // ── Serialization ──
     #[error("Serialization error: {source}")]
     Serialization {
@@ -113,25 +76,20 @@ pub enum ZlError {
 
     // ── GPG/Signature ──
     #[error("GPG signature verification failed for {path}: {message}")]
-    GpgVerification {
-        path: std::path::PathBuf,
-        message: String,
-    },
+    GpgVerification { path: PathBuf, message: String },
 
     // ── Self-update ──
     #[error("Self-update failed: {0}")]
     SelfUpdate(String),
 
+    // ── Verification ──
+    #[allow(dead_code)]
+    #[error("Verification failed:\n{0}")]
+    Verification(String),
+
     // ── Environments ──
     #[error("Environment error: {0}")]
     Environment(String),
-}
-
-fn format_missing_deps(deps: &[String]) -> String {
-    deps.iter()
-        .map(|d| format!("  - {}", d))
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 impl ZlError {
@@ -140,9 +98,6 @@ impl ZlError {
         match self {
             ZlError::PackageNotFound { .. } => {
                 Some("Check the package name or try a different source with --from")
-            }
-            ZlError::UnresolvableDeps { .. } => {
-                Some("Try installing the missing dependencies manually first")
             }
             ZlError::DownloadFailed { .. } => {
                 Some("Check your internet connection or try again later")
@@ -156,7 +111,6 @@ impl ZlError {
             ZlError::BuildToolMissing { .. } => {
                 Some("Install the required build tool with your system package manager")
             }
-            ZlError::DependencyCycle { .. } => Some("This is a packaging bug — report it upstream"),
             ZlError::PackageConflict { .. } => {
                 Some("Remove the conflicting package first with `zl remove`")
             }

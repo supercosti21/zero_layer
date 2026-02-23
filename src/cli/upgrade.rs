@@ -1,10 +1,7 @@
-use crate::core::db::ops::ZlDatabase;
 use crate::error::ZlResult;
-use crate::paths::ZlPaths;
-use crate::plugin::{PackageCandidate, PluginRegistry};
-use crate::system::SystemProfile;
+use crate::plugin::PackageCandidate;
 
-use super::{RemoveArgs, UpgradeArgs};
+use super::{AppContext, RemoveArgs, UpgradeArgs};
 
 /// An available upgrade for a single package
 struct UpgradeEntry {
@@ -15,17 +12,8 @@ struct UpgradeEntry {
     source_name: String,
 }
 
-pub fn handle(
-    args: UpgradeArgs,
-    paths: &ZlPaths,
-    db: &ZlDatabase,
-    registry: &PluginRegistry,
-    profile: &SystemProfile,
-    _auto_yes: bool,
-    dry_run: bool,
-    skip_verify: bool,
-) -> ZlResult<()> {
-    let packages = db.list_packages()?;
+pub fn handle(args: UpgradeArgs, ctx: &AppContext) -> ZlResult<()> {
+    let packages = ctx.db.list_packages()?;
 
     if packages.is_empty() {
         println!("No packages installed.");
@@ -34,11 +22,11 @@ pub fn handle(
 
     // Sync all relevant plugins
     println!("Syncing package databases...");
-    for plugin in registry.all() {
-        if let Some(ref source_filter) = args.from {
-            if plugin.name() != source_filter {
-                continue;
-            }
+    for plugin in ctx.registry.all() {
+        if let Some(ref source_filter) = args.from
+            && plugin.name() != source_filter
+        {
+            continue;
         }
         if let Err(e) = plugin.sync() {
             tracing::warn!("Failed to sync {}: {}", plugin.name(), e);
@@ -55,7 +43,7 @@ pub fn handle(
             continue;
         }
 
-        if db.is_pinned(&pkg.id.name)? {
+        if ctx.db.is_pinned(&pkg.id.name)? {
             skipped_pinned += 1;
             continue;
         }
@@ -63,13 +51,13 @@ pub fn handle(
         let source_name = pkg.id.source.split('/').next().unwrap_or(&pkg.id.source);
 
         // If --from filter is set, skip packages from other sources
-        if let Some(ref source_filter) = args.from {
-            if source_name != source_filter {
-                continue;
-            }
+        if let Some(ref source_filter) = args.from
+            && source_name != source_filter
+        {
+            continue;
         }
 
-        let plugin = match registry.get(source_name) {
+        let plugin = match ctx.registry.get(source_name) {
             Some(p) => p,
             None => continue,
         };
@@ -127,7 +115,7 @@ pub fn handle(
         return Ok(());
     }
 
-    if dry_run {
+    if ctx.dry_run {
         println!(
             "\n[DRY-RUN] Would upgrade {} package(s). No changes made.",
             upgrades.len()
@@ -157,7 +145,7 @@ pub fn handle(
             entry.name, entry.old_version, entry.new_version
         );
 
-        let plugin = match registry.get(&entry.source_name) {
+        let plugin = match ctx.registry.get(&entry.source_name) {
             Some(p) => p,
             None => {
                 eprintln!("  Plugin {} not found, skipping", entry.source_name);
@@ -172,7 +160,7 @@ pub fn handle(
             cascade: false,
             version: Some(entry.old_version.clone()),
         };
-        if let Err(e) = super::remove::handle(remove_args, paths, db, true, false) {
+        if let Err(e) = super::remove::handle(remove_args, ctx) {
             eprintln!("  Failed to remove old version: {}", e);
             failed += 1;
             continue;
@@ -182,11 +170,11 @@ pub fn handle(
         match super::install::install_single_package(
             &entry.candidate,
             true,
-            paths,
-            db,
+            ctx.paths,
+            ctx.db,
             plugin,
-            profile,
-            skip_verify,
+            ctx.profile,
+            ctx.skip_verify,
         ) {
             Ok(()) => {
                 upgraded += 1;

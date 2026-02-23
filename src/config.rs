@@ -47,6 +47,7 @@ pub struct GeneralConfig {
 pub struct PluginConfig {
     /// Whether this plugin is enabled
     #[serde(default = "default_true")]
+    #[allow(dead_code)]
     pub enabled: bool,
     /// Cache directory for this plugin (set at runtime)
     #[serde(skip)]
@@ -73,6 +74,7 @@ impl ZlConfig {
     }
 
     /// Load config from a specific path
+    #[allow(dead_code)]
     pub fn load_from(path: &Path) -> ZlResult<Self> {
         let content = std::fs::read_to_string(path)?;
         toml::from_str(&content).map_err(|e| crate::error::ZlError::Config(e.to_string()))

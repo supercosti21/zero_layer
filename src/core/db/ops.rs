@@ -27,8 +27,9 @@ impl ZlDatabase {
                 .map_err(|e| ZlError::Config(format!("Failed to init FILE_OWNERS table: {}", e)))?;
             txn.open_table(LIB_INDEX)
                 .map_err(|e| ZlError::Config(format!("Failed to init LIB_INDEX table: {}", e)))?;
-            txn.open_table(DEPENDENCIES)
-                .map_err(|e| ZlError::Config(format!("Failed to init DEPENDENCIES table: {}", e)))?;
+            txn.open_table(DEPENDENCIES).map_err(|e| {
+                ZlError::Config(format!("Failed to init DEPENDENCIES table: {}", e))
+            })?;
             txn.open_table(PLUGIN_META)
                 .map_err(|e| ZlError::Config(format!("Failed to init PLUGIN_META table: {}", e)))?;
             txn.open_table(PINNED)
@@ -407,6 +408,7 @@ impl ZlDatabase {
     // ── Plugin metadata ──
 
     /// Store arbitrary plugin metadata (e.g. last sync timestamp)
+    #[allow(dead_code)]
     pub fn put_plugin_meta(&self, plugin_name: &str, data: &[u8]) -> ZlResult<()> {
         let txn = self
             .db

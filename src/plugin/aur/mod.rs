@@ -47,8 +47,8 @@ pub struct AurPlugin {
     client: reqwest::blocking::Client,
 }
 
-impl AurPlugin {
-    pub fn new() -> Self {
+impl Default for AurPlugin {
+    fn default() -> Self {
         Self {
             cache_dir: PathBuf::new(),
             client: reqwest::blocking::Client::builder()
@@ -56,6 +56,12 @@ impl AurPlugin {
                 .build()
                 .unwrap_or_default(),
         }
+    }
+}
+
+impl AurPlugin {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     fn to_candidate(pkg: &AurPackage) -> PackageCandidate {
@@ -80,7 +86,11 @@ impl AurPlugin {
             .client
             .get(url)
             .timeout(std::time::Duration::from_secs(30))
-            .send()?;
+            .send()
+            .map_err(|e| ZlError::Plugin {
+                plugin: "aur".into(),
+                message: format!("AUR RPC request failed: {}", e),
+            })?;
 
         if !resp.status().is_success() {
             return Err(ZlError::Plugin {
@@ -131,7 +141,7 @@ impl SourcePlugin for AurPlugin {
             .map(Self::to_candidate);
 
         // If a version was requested, check it matches
-        Ok(candidate.filter(|c| version.map_or(true, |v| c.version == v)))
+        Ok(candidate.filter(|c| version.is_none_or(|v| c.version == v)))
     }
 
     fn download(&self, candidate: &PackageCandidate, dest_dir: &Path) -> ZlResult<PathBuf> {

@@ -103,15 +103,18 @@ pub fn extract(deb_path: &Path, metadata: PackageCandidate) -> ZlResult<Extracte
 fn unpack_tar<R: Read>(reader: R, dest: &Path) -> ZlResult<()> {
     let mut archive = tar::Archive::new(reader);
     archive.set_preserve_permissions(false);
-    archive.unpack(dest).map_err(|e| {
-        ZlError::Archive(format!("tar extraction failed: {}", e))
-    })
+    archive
+        .unpack(dest)
+        .map_err(|e| ZlError::Archive(format!("tar extraction failed: {}", e)))
 }
 
 fn is_script(path: &Path) -> bool {
     if let Some(ext) = path.extension() {
         let ext = ext.to_string_lossy();
-        if matches!(ext.as_ref(), "sh" | "bash" | "py" | "pl" | "rb" | "lua" | "fish") {
+        if matches!(
+            ext.as_ref(),
+            "sh" | "bash" | "py" | "pl" | "rb" | "lua" | "fish"
+        ) {
             return true;
         }
     }
@@ -125,7 +128,11 @@ fn is_script(path: &Path) -> bool {
 }
 
 /// Download a .deb file from a URL into dest_dir, verify checksum
-pub fn download_deb(url: &str, expected_sha256: Option<&str>, dest_dir: &Path) -> ZlResult<PathBuf> {
+pub fn download_deb(
+    url: &str,
+    expected_sha256: Option<&str>,
+    dest_dir: &Path,
+) -> ZlResult<PathBuf> {
     let filename = url.rsplit('/').next().unwrap_or("package.deb");
     let dest_path = dest_dir.join(filename);
 

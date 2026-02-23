@@ -16,6 +16,22 @@ pub mod upgrade;
 use clap::{ArgAction, Args, Parser, Subcommand};
 use clap_complete::Shell;
 
+use crate::core::db::ops::ZlDatabase;
+use crate::paths::ZlPaths;
+use crate::plugin::PluginRegistry;
+use crate::system::SystemProfile;
+
+/// Shared application context passed to all command handlers.
+pub struct AppContext<'a> {
+    pub paths: &'a ZlPaths,
+    pub db: &'a ZlDatabase,
+    pub registry: &'a PluginRegistry,
+    pub profile: &'a SystemProfile,
+    pub auto_yes: bool,
+    pub dry_run: bool,
+    pub skip_verify: bool,
+}
+
 #[derive(Parser)]
 #[command(
     name = "zl",
