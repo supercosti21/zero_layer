@@ -14,7 +14,10 @@ These rules are **mandatory** for every Claude instance working on this repo.
 6. **Atomic commits** — 1 commit = 1 concept. Better 3 small focused commits than 1 giant commit. Each commit should be self-contained and pass CI on its own.
 7. **Commit message format** — `type: clear title` where type is `feat`, `fix`, `chore`, `refactor`, or `docs`. Add bullet points in the body for details when needed.
 8. **Documentation** — After every significant change, update `CLAUDE.md` first (implementation state, module structure, test count), then `README.md` if user-facing features changed.
-9. **GitHub metadata** — When changes affect the project scope, features, or tech stack, update the GitHub repository description and topics to stay in sync. See the "GitHub Metadata" section below for current values and the `gh` commands to update them.
+9. **Wiki** — After every significant change, also update the relevant pages in `docs/wiki/` to keep the wiki in sync with the codebase. If a new feature is added, create or update the appropriate wiki page.
+10. **GitHub metadata** — When changes affect the project scope, features, or tech stack, update the GitHub repository description and topics to stay in sync. See the "GitHub Metadata" section below for current values and the `gh` commands to update them.
+11. **Tests** — Every new feature or bug fix must include corresponding unit tests. Run `cargo test` before committing to ensure nothing is broken. Never commit code that fails tests.
+12. **CI must pass** — Every commit must pass the full CI pipeline (`cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test`). Do not merge branches that fail CI.
 
 ## Project Overview
 
