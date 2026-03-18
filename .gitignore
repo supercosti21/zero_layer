@@ -38,3 +38,6 @@ Desktop.ini
 *.tmp
 *.bak
 *.orig
+
+# === Wiki (lives in github.com/supercosti21/zero_layer.wiki.git) ===
+docs/wiki/
