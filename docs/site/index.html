@@ -50,7 +50,8 @@
     }
     </script>
 
-    <link rel="icon" type="image/png" href="logo.png">
+    <meta name="google-site-verification" content="SOz7K9fn7Ufe9BBDrjT0qwhMdgkpUGnkn6G0N_oc8o0" />
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%237c5bf0'/%3E%3Cstop offset='1' stop-color='%23a78bfa'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='32' height='32' rx='8' fill='url(%23g)'/%3E%3Ctext x='16' y='22' text-anchor='middle' font-family='system-ui,sans-serif' font-weight='800' font-size='16' fill='white'%3EZL%3C/text%3E%3C/svg%3E">
     <style>
         *, *::before, *::after {
             margin: 0;
@@ -226,18 +227,6 @@
         @keyframes blink {
             0%, 100% { opacity: 1; }
             50% { opacity: 0.3; }
-        }
-        .hero-logo {
-            width: 120px;
-            height: 120px;
-            border-radius: 24px;
-            margin-bottom: 32px;
-            filter: drop-shadow(0 0 40px rgba(124, 91, 240, 0.3));
-            animation: logoFloat 4s ease-in-out infinite;
-        }
-        @keyframes logoFloat {
-            0%, 100% { transform: translateY(0); }
-            50% { transform: translateY(-8px); }
         }
         .hero h1 {
             font-size: clamp(2.8rem, 6vw, 4.5rem);
@@ -599,7 +588,12 @@
 <nav id="nav">
     <div class="nav-inner">
         <a href="#" class="nav-logo">
-            <img src="logo.png" alt="ZL">
+            <svg width="32" height="32" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
+                <defs><linearGradient id="logo-grad" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7c5bf0"/><stop offset="1" stop-color="#a78bfa"/></linearGradient></defs>
+                <rect width="32" height="32" rx="8" fill="url(#logo-grad)"/>
+                <path d="M10 11h10.5l-8.5 10h10.5" stroke="white" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+                <circle cx="24" cy="11" r="1.6" fill="white" opacity="0.85"/>
+            </svg>
             Zero Layer
         </a>
         <div class="nav-links">
@@ -616,9 +610,6 @@
 
     <!-- Hero -->
     <section class="hero">
-        <div class="fade-in">
-            <img src="logo.png" alt="Zero Layer" class="hero-logo">
-        </div>
         <div class="fade-in">
             <div class="badge">
                 <span class="dot"></span>
