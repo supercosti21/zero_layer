@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://supercosti21.github.io/zero_layer/sitemap.xml
