@@ -227,6 +227,18 @@
             0%, 100% { opacity: 1; }
             50% { opacity: 0.3; }
         }
+        .hero-logo {
+            width: 120px;
+            height: 120px;
+            border-radius: 24px;
+            margin-bottom: 32px;
+            filter: drop-shadow(0 0 40px rgba(124, 91, 240, 0.3));
+            animation: logoFloat 4s ease-in-out infinite;
+        }
+        @keyframes logoFloat {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-8px); }
+        }
         .hero h1 {
             font-size: clamp(2.8rem, 6vw, 4.5rem);
             font-weight: 800;
@@ -604,6 +616,9 @@
 
     <!-- Hero -->
     <section class="hero">
+        <div class="fade-in">
+            <img src="logo.png" alt="Zero Layer" class="hero-logo">
+        </div>
         <div class="fade-in">
             <div class="badge">
                 <span class="dot"></span>
