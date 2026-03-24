@@ -2,7 +2,7 @@
 name = "zero_layer"
 version = "0.1.0"
 edition = "2024"
-license = "GPL-3.0-only"
+license = "MIT"
 description = "Universal Linux package manager with native binary translation"
 
 [[bin]]

@@ -306,4 +306,4 @@ cargo fmt                # Format
 
 ## License
 
-GPL v3 — see [LICENSE](LICENSE) for details.
+MIT — see [LICENSE](LICENSE) for details.
