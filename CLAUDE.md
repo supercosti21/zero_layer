@@ -25,7 +25,7 @@ These rules are **mandatory** for every Claude instance working on this repo.
 
 **Binary name**: `zl`
 **Rust edition**: 2024 (requires Rust 1.85+)
-**License**: GPL v3
+**License**: MIT
 
 ## Build Commands
 
