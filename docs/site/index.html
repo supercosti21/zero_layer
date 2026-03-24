@@ -1,0 +1,833 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zero Layer — Universal Linux Package Manager</title>
+    <meta name="description" content="Install packages from any source on any Linux distro. Native binary translation — no containers, no VMs, zero runtime overhead. Written in Rust.">
+    <meta name="keywords" content="linux, package manager, rust, elf, binary translation, pacman, apt, dnf, nix, cross-distribution, universal">
+    <meta name="author" content="supercosti21">
+    <meta name="robots" content="index, follow">
+
+    <!-- Open Graph -->
+    <meta property="og:title" content="Zero Layer — Universal Linux Package Manager">
+    <meta property="og:description" content="Install packages from any source on any Linux distro. Native binary translation — no containers, no VMs, zero runtime overhead.">
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://supercosti21.github.io/zero_layer/">
+    <meta property="og:image" content="https://supercosti21.github.io/zero_layer/og-image.png">
+    <meta property="og:site_name" content="Zero Layer">
+
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="Zero Layer — Universal Linux Package Manager">
+    <meta name="twitter:description" content="Install packages from any source on any Linux distro. Native binary translation — no containers, no VMs, zero runtime overhead.">
+    <meta name="twitter:image" content="https://supercosti21.github.io/zero_layer/og-image.png">
+
+    <!-- Canonical -->
+    <link rel="canonical" href="https://supercosti21.github.io/zero_layer/">
+
+    <!-- JSON-LD structured data -->
+    <script type="application/ld+json">
+    {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "Zero Layer",
+        "alternateName": "zl",
+        "description": "Universal Linux package manager with native binary translation. Install packages from any source on any Linux distro.",
+        "applicationCategory": "DeveloperApplication",
+        "operatingSystem": "Linux",
+        "url": "https://supercosti21.github.io/zero_layer/",
+        "downloadUrl": "https://github.com/supercosti21/zero_layer/releases/latest",
+        "softwareVersion": "0.1.0",
+        "programmingLanguage": "Rust",
+        "license": "https://www.gnu.org/licenses/gpl-3.0.html",
+        "codeRepository": "https://github.com/supercosti21/zero_layer",
+        "author": {
+            "@type": "Person",
+            "name": "supercosti21",
+            "url": "https://github.com/supercosti21"
+        }
+    }
+    </script>
+
+    <link rel="icon" type="image/png" href="logo.png">
+    <style>
+        *, *::before, *::after {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --bg: #08080c;
+            --bg-card: #111118;
+            --bg-card-hover: #16161f;
+            --border: #1e1e2a;
+            --border-hover: #2a2a3a;
+            --text: #e4e4ed;
+            --text-dim: #8888a0;
+            --accent: #7c5bf0;
+            --accent-light: #a78bfa;
+            --accent-glow: rgba(124, 91, 240, 0.15);
+            --green: #34d399;
+            --blue: #60a5fa;
+            --orange: #fb923c;
+            --pink: #f472b6;
+            --teal: #2dd4bf;
+            --red: #f85149;
+        }
+
+        html {
+            scroll-behavior: smooth;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, system-ui, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            -webkit-font-smoothing: antialiased;
+            line-height: 1.6;
+            overflow-x: hidden;
+        }
+
+        code, pre, .mono {
+            font-family: 'SF Mono', 'Cascadia Code', 'JetBrains Mono', 'Fira Code', monospace;
+        }
+
+        /* Ambient background */
+        .ambient {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 0;
+        }
+        .ambient::before {
+            content: '';
+            position: absolute;
+            top: -20%;
+            left: 30%;
+            width: 60%;
+            height: 60%;
+            background: radial-gradient(ellipse, rgba(124, 91, 240, 0.08), transparent 70%);
+            animation: pulse 8s ease-in-out infinite;
+        }
+        .ambient::after {
+            content: '';
+            position: absolute;
+            bottom: -10%;
+            right: 10%;
+            width: 50%;
+            height: 50%;
+            background: radial-gradient(ellipse, rgba(52, 211, 153, 0.04), transparent 70%);
+            animation: pulse 10s ease-in-out infinite reverse;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 0.5; transform: scale(1); }
+            50% { opacity: 1; transform: scale(1.1); }
+        }
+
+        /* Nav */
+        nav {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 100;
+            background: rgba(8, 8, 12, 0.8);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border-bottom: 1px solid transparent;
+            transition: border-color 0.3s;
+        }
+        nav.scrolled {
+            border-bottom-color: var(--border);
+        }
+        .nav-inner {
+            max-width: 1100px;
+            margin: 0 auto;
+            padding: 0 24px;
+            height: 64px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .nav-logo {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            text-decoration: none;
+            color: var(--text);
+            font-weight: 800;
+            font-size: 1.2rem;
+        }
+        .nav-logo img {
+            width: 32px;
+            height: 32px;
+            border-radius: 8px;
+        }
+        .nav-links {
+            display: flex;
+            gap: 28px;
+            align-items: center;
+        }
+        .nav-links a {
+            color: var(--text-dim);
+            text-decoration: none;
+            font-size: 0.9rem;
+            font-weight: 500;
+            transition: color 0.2s;
+        }
+        .nav-links a:hover {
+            color: var(--text);
+        }
+
+        /* Container */
+        .container {
+            max-width: 1100px;
+            margin: 0 auto;
+            padding: 0 24px;
+            position: relative;
+            z-index: 1;
+        }
+
+        section {
+            padding: 100px 0;
+        }
+
+        /* Hero */
+        .hero {
+            padding-top: 160px;
+            padding-bottom: 100px;
+            text-align: center;
+        }
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 16px;
+            border-radius: 100px;
+            background: var(--accent-glow);
+            border: 1px solid rgba(124, 91, 240, 0.3);
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: var(--accent-light);
+            margin-bottom: 32px;
+        }
+        .badge .dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--green);
+            animation: blink 2s infinite;
+        }
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.3; }
+        }
+        .hero h1 {
+            font-size: clamp(2.8rem, 6vw, 4.5rem);
+            font-weight: 800;
+            letter-spacing: -0.03em;
+            line-height: 1.1;
+            margin-bottom: 24px;
+        }
+        .hero h1 .gradient {
+            background: linear-gradient(135deg, #a78bfa, #f472b6, #fb923c);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        .hero p {
+            font-size: 1.2rem;
+            color: var(--text-dim);
+            max-width: 600px;
+            margin: 0 auto 40px;
+            line-height: 1.7;
+        }
+        .hero-buttons {
+            display: flex;
+            gap: 16px;
+            justify-content: center;
+            flex-wrap: wrap;
+            margin-bottom: 48px;
+        }
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 12px 24px;
+            border-radius: 12px;
+            font-size: 0.95rem;
+            font-weight: 600;
+            text-decoration: none;
+            transition: all 0.2s;
+            cursor: pointer;
+            border: none;
+        }
+        .btn-primary {
+            background: var(--accent);
+            color: #fff;
+            box-shadow: 0 4px 20px rgba(124, 91, 240, 0.3);
+        }
+        .btn-primary:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 6px 28px rgba(124, 91, 240, 0.45);
+        }
+        .btn-secondary {
+            background: var(--bg-card);
+            color: var(--text);
+            border: 1px solid var(--border);
+        }
+        .btn-secondary:hover {
+            background: var(--bg-card-hover);
+            border-color: var(--border-hover);
+            transform: translateY(-1px);
+        }
+
+        /* Terminal preview */
+        .terminal {
+            max-width: 700px;
+            margin: 0 auto;
+            border-radius: 16px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            overflow: hidden;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4), 0 0 40px var(--accent-glow);
+            text-align: left;
+        }
+        .terminal-bar {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 14px 18px;
+            background: rgba(255, 255, 255, 0.03);
+            border-bottom: 1px solid var(--border);
+        }
+        .terminal-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+        }
+        .terminal-dot.red { background: #ff5f57; }
+        .terminal-dot.yellow { background: #febc2e; }
+        .terminal-dot.green { background: #28c840; }
+        .terminal-body {
+            padding: 20px 24px;
+            font-size: 0.9rem;
+            line-height: 1.8;
+        }
+        .terminal-body .prompt {
+            color: var(--accent-light);
+        }
+        .terminal-body .cmd {
+            color: var(--text);
+        }
+        .terminal-body .comment {
+            color: var(--text-dim);
+        }
+        .terminal-body .output {
+            color: var(--green);
+        }
+
+        /* Section header */
+        .section-label {
+            text-transform: uppercase;
+            font-size: 0.85rem;
+            font-weight: 600;
+            letter-spacing: 0.08em;
+            color: var(--accent-light);
+            margin-bottom: 12px;
+        }
+        .section-title {
+            font-size: clamp(2rem, 4vw, 2.8rem);
+            font-weight: 800;
+            letter-spacing: -0.02em;
+            margin-bottom: 16px;
+        }
+        .section-desc {
+            color: var(--text-dim);
+            font-size: 1.05rem;
+            max-width: 600px;
+            margin: 0 auto 60px;
+            line-height: 1.7;
+        }
+
+        /* Features grid */
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 20px;
+        }
+        .feature-card {
+            padding: 28px;
+            border-radius: 16px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            transition: all 0.2s;
+        }
+        .feature-card:hover {
+            background: var(--bg-card-hover);
+            border-color: var(--border-hover);
+            transform: translateY(-2px);
+        }
+        .feature-card.wide {
+            grid-column: span 2;
+        }
+        .feature-icon {
+            width: 44px;
+            height: 44px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.3rem;
+            margin-bottom: 16px;
+        }
+        .feature-card h3 {
+            font-size: 1.1rem;
+            font-weight: 700;
+            margin-bottom: 8px;
+        }
+        .feature-card p {
+            color: var(--text-dim);
+            font-size: 0.9rem;
+            line-height: 1.6;
+        }
+
+        /* Sources pills */
+        .sources-wrap {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            justify-content: center;
+            margin-top: 40px;
+        }
+        .source-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 18px;
+            border-radius: 100px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            font-size: 0.9rem;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+        .source-pill:hover {
+            border-color: var(--border-hover);
+            background: var(--bg-card-hover);
+        }
+        .source-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+        }
+
+        /* How it works */
+        .steps {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 20px;
+            counter-reset: step;
+        }
+        .step {
+            padding: 28px;
+            border-radius: 16px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            position: relative;
+            counter-increment: step;
+            transition: all 0.2s;
+        }
+        .step:hover {
+            background: var(--bg-card-hover);
+            border-color: var(--border-hover);
+        }
+        .step::before {
+            content: counter(step);
+            position: absolute;
+            top: 28px;
+            right: 28px;
+            font-size: 2rem;
+            font-weight: 800;
+            color: rgba(124, 91, 240, 0.15);
+        }
+        .step h3 {
+            font-size: 1.05rem;
+            font-weight: 700;
+            margin-bottom: 8px;
+        }
+        .step p {
+            color: var(--text-dim);
+            font-size: 0.9rem;
+            line-height: 1.6;
+        }
+
+        /* Tech stack */
+        .stack-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 20px;
+        }
+        .stack-card {
+            padding: 28px;
+            border-radius: 16px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            text-decoration: none;
+            color: var(--text);
+            transition: all 0.2s;
+        }
+        .stack-card:hover {
+            background: var(--bg-card-hover);
+            border-color: var(--border-hover);
+            transform: translateY(-2px);
+        }
+        .stack-card .stack-icon {
+            width: 48px;
+            height: 48px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5rem;
+            margin-bottom: 16px;
+        }
+        .stack-card h3 {
+            font-size: 1.05rem;
+            font-weight: 700;
+            margin-bottom: 6px;
+        }
+        .stack-card p {
+            color: var(--text-dim);
+            font-size: 0.88rem;
+            line-height: 1.6;
+        }
+
+        /* CTA */
+        .cta-box {
+            border-radius: 24px;
+            padding: 64px 48px;
+            text-align: center;
+            background: linear-gradient(135deg, rgba(124, 91, 240, 0.08), rgba(244, 114, 182, 0.05));
+            border: 1px solid rgba(124, 91, 240, 0.2);
+        }
+        .cta-box h2 {
+            font-size: clamp(1.8rem, 3vw, 2.4rem);
+            font-weight: 800;
+            margin-bottom: 16px;
+        }
+        .cta-box p {
+            color: var(--text-dim);
+            font-size: 1.05rem;
+            margin-bottom: 32px;
+        }
+
+        /* Footer */
+        footer {
+            padding: 40px 0;
+            text-align: center;
+            border-top: 1px solid var(--border);
+            color: var(--text-dim);
+            font-size: 0.85rem;
+        }
+        footer a {
+            color: var(--accent-light);
+            text-decoration: none;
+        }
+        footer a:hover {
+            text-decoration: underline;
+        }
+
+        /* Fade in */
+        .fade-in {
+            opacity: 0;
+            transform: translateY(20px);
+            transition: opacity 0.6s ease, transform 0.6s ease;
+        }
+        .fade-in.visible {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .features-grid,
+            .steps,
+            .stack-grid {
+                grid-template-columns: 1fr;
+            }
+            .feature-card.wide {
+                grid-column: span 1;
+            }
+            section {
+                padding: 60px 0;
+            }
+            .hero {
+                padding-top: 120px;
+            }
+            .nav-links {
+                gap: 16px;
+            }
+            .cta-box {
+                padding: 40px 24px;
+            }
+        }
+    </style>
+</head>
+<body>
+
+<div class="ambient"></div>
+
+<!-- Nav -->
+<nav id="nav">
+    <div class="nav-inner">
+        <a href="#" class="nav-logo">
+            <img src="logo.png" alt="ZL">
+            Zero Layer
+        </a>
+        <div class="nav-links">
+            <a href="#features">Features</a>
+            <a href="#sources">Sources</a>
+            <a href="#how-it-works">How It Works</a>
+            <a href="#stack">Stack</a>
+            <a href="https://github.com/supercosti21/zero_layer" target="_blank" rel="noopener">GitHub</a>
+        </div>
+    </div>
+</nav>
+
+<div class="container">
+
+    <!-- Hero -->
+    <section class="hero">
+        <div class="fade-in">
+            <div class="badge">
+                <span class="dot"></span>
+                Open Source &mdash; GPLv3
+            </div>
+        </div>
+        <h1 class="fade-in">
+            One command.<br>
+            <span class="gradient">Any package. Any distro.</span>
+        </h1>
+        <p class="fade-in">
+            Zero Layer is a universal Linux package manager that translates binaries natively at install time. No containers, no VMs, zero runtime overhead. Written in Rust.
+        </p>
+        <div class="hero-buttons fade-in">
+            <a href="https://github.com/supercosti21/zero_layer/releases/latest" class="btn btn-primary">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                Download
+            </a>
+            <a href="https://github.com/supercosti21/zero_layer" class="btn btn-secondary" target="_blank" rel="noopener">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/></svg>
+                View Source
+            </a>
+        </div>
+
+        <!-- Terminal preview -->
+        <div class="terminal fade-in">
+            <div class="terminal-bar">
+                <span class="terminal-dot red"></span>
+                <span class="terminal-dot yellow"></span>
+                <span class="terminal-dot green"></span>
+            </div>
+            <div class="terminal-body">
+                <div><span class="prompt">$</span> <span class="cmd">zl install firefox --from pacman</span></div>
+                <div class="comment"># Arch package on Ubuntu? No problem.</div>
+                <div style="margin-top: 10px"><span class="prompt">$</span> <span class="cmd">zl install sharkdp/bat --from github</span></div>
+                <div class="output">&#10003; Downloaded bat-v0.24.0-x86_64-unknown-linux-gnu.tar.gz</div>
+                <div class="output">&#10003; Patched 1 ELF binary (interpreter + RUNPATH)</div>
+                <div class="output">&#10003; Installed bat 0.24.0 [3 files, 2.1 MB]</div>
+                <div style="margin-top: 10px"><span class="prompt">$</span> <span class="cmd">zl search vim --from pacman,apt,nix</span></div>
+                <div class="comment"># Search across 13 sources simultaneously</div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Features -->
+    <section id="features">
+        <div class="text-center fade-in" style="text-align: center;">
+            <div class="section-label">Features</div>
+            <h2 class="section-title">Everything you need</h2>
+            <p class="section-desc">
+                A single binary that replaces the need for containers, VMs, or compatibility layers. Install anything, anywhere.
+            </p>
+        </div>
+
+        <div class="features-grid">
+            <div class="feature-card wide fade-in">
+                <div class="feature-icon" style="background: rgba(124, 91, 240, 0.15); color: var(--accent-light);">&#9881;</div>
+                <h3>Native Binary Translation</h3>
+                <p>ELF binaries are analyzed with goblin and patched with elb at install time. Dynamic linker and RUNPATH are set to match your system. Packages run at full native speed with zero overhead.</p>
+            </div>
+            <div class="feature-card fade-in">
+                <div class="feature-icon" style="background: rgba(52, 211, 153, 0.15); color: var(--green);">&#9889;</div>
+                <h3>13 Package Sources</h3>
+                <p>pacman, apt, dnf, AUR, Nix, Flatpak, Snap, AppImage, GitHub Releases, and more. All queried in parallel.</p>
+            </div>
+            <div class="feature-card fade-in">
+                <div class="feature-icon" style="background: rgba(96, 165, 250, 0.15); color: var(--blue);">&#128270;</div>
+                <h3>Smart Search</h3>
+                <p>Relevance-scored results across all sources. Exact matches highlighted. AUR binary variants auto-discovered.</p>
+            </div>
+            <div class="feature-card fade-in">
+                <div class="feature-icon" style="background: rgba(251, 146, 60, 0.15); color: var(--orange);">&#128274;</div>
+                <h3>Atomic Transactions</h3>
+                <p>Every install is wrapped in a transaction. If anything fails, everything rolls back. No half-installed packages.</p>
+            </div>
+            <div class="feature-card fade-in">
+                <div class="feature-icon" style="background: rgba(244, 114, 182, 0.15); color: var(--pink);">&#128269;</div>
+                <h3>Cross-Source Deps</h3>
+                <p>Dependencies not found in the primary source are automatically searched across all other enabled sources.</p>
+            </div>
+            <div class="feature-card fade-in">
+                <div class="feature-icon" style="background: rgba(45, 212, 191, 0.15); color: var(--teal);">&#128736;</div>
+                <h3>Full Diagnostics</h3>
+                <p>doctor, audit, diff, size, history, rollback, why — everything you need to understand and manage your packages.</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Sources -->
+    <section id="sources">
+        <div style="text-align: center;" class="fade-in">
+            <div class="section-label">Sources</div>
+            <h2 class="section-title">13 sources, one interface</h2>
+            <p class="section-desc">Install from any Linux package repository or release platform. ZL handles the translation.</p>
+        </div>
+        <div class="sources-wrap fade-in">
+            <span class="source-pill"><span class="source-dot" style="background: var(--blue)"></span> pacman</span>
+            <span class="source-pill"><span class="source-dot" style="background: var(--accent-light)"></span> AUR</span>
+            <span class="source-pill"><span class="source-dot" style="background: var(--orange)"></span> apt</span>
+            <span class="source-pill"><span class="source-dot" style="background: var(--green)"></span> dnf</span>
+            <span class="source-pill"><span class="source-dot" style="background: var(--teal)"></span> zypper</span>
+            <span class="source-pill"><span class="source-dot" style="background: var(--pink)"></span> apk</span>
+            <span class="source-pill"><span class="source-dot" style="background: var(--red)"></span> xbps</span>
+            <span class="source-pill"><span class="source-dot" style="background: var(--blue)"></span> portage</span>
+            <span class="source-pill"><span class="source-dot" style="background: var(--accent-light)"></span> nix</span>
+            <span class="source-pill"><span class="source-dot" style="background: var(--green)"></span> flatpak</span>
+            <span class="source-pill"><span class="source-dot" style="background: var(--orange)"></span> snap</span>
+            <span class="source-pill"><span class="source-dot" style="background: var(--pink)"></span> appimage</span>
+            <span class="source-pill"><span class="source-dot" style="background: var(--teal)"></span> github</span>
+        </div>
+    </section>
+
+    <!-- How it works -->
+    <section id="how-it-works">
+        <div style="text-align: center;" class="fade-in">
+            <div class="section-label">How It Works</div>
+            <h2 class="section-title">Install in 4 steps</h2>
+            <p class="section-desc">All translation happens at install time. After that, binaries run at full native speed.</p>
+        </div>
+        <div class="steps fade-in">
+            <div class="step">
+                <h3>Download</h3>
+                <p>Parallel downloads (4 threads) with progress bars, retries, and SHA256 verification. Packages are fetched directly from their native repositories.</p>
+            </div>
+            <div class="step">
+                <h3>Verify</h3>
+                <p>SHA256 checksums and GPG signatures are checked. The archive format is detected and extracted — deb, rpm, tar, nar, squashfs, zip, or AppImage.</p>
+            </div>
+            <div class="step">
+                <h3>Patch</h3>
+                <p>Every ELF binary is analyzed with goblin. The dynamic linker (PT_INTERP) and library search path (RUNPATH) are patched to match your system using elb. Parallel patching for multi-binary packages.</p>
+            </div>
+            <div class="step">
+                <h3>Install</h3>
+                <p>Files are placed atomically inside a transaction. If anything fails, everything rolls back. Dependencies, files, and history are tracked in a redb database.</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Tech Stack -->
+    <section id="stack">
+        <div style="text-align: center;" class="fade-in">
+            <div class="section-label">Tech Stack</div>
+            <h2 class="section-title">Built with Rust</h2>
+            <p class="section-desc">Single binary, zero C dependencies. Pure Rust from ELF parsing to database storage.</p>
+        </div>
+        <div class="stack-grid fade-in">
+            <a href="https://www.rust-lang.org" target="_blank" rel="noopener" class="stack-card">
+                <div class="stack-icon" style="background: rgba(251, 146, 60, 0.15); color: var(--orange);">&#129408;</div>
+                <h3>Rust</h3>
+                <p>Memory-safe, fast, single binary. Edition 2024 with zero unsafe code in the main crate.</p>
+            </a>
+            <a href="https://github.com/m4b/goblin" target="_blank" rel="noopener" class="stack-card">
+                <div class="stack-icon" style="background: rgba(96, 165, 250, 0.15); color: var(--blue);">&#128065;</div>
+                <h3>goblin + elb</h3>
+                <p>Pure Rust ELF analysis and binary patching. Read metadata, set interpreter and RUNPATH.</p>
+            </a>
+            <a href="https://www.redb.org" target="_blank" rel="noopener" class="stack-card">
+                <div class="stack-icon" style="background: rgba(52, 211, 153, 0.15); color: var(--green);">&#128451;</div>
+                <h3>redb</h3>
+                <p>Embedded key-value database. ACID transactions, pure Rust. No SQLite, no C dependencies.</p>
+            </a>
+            <div class="stack-card">
+                <div class="stack-icon" style="background: rgba(244, 114, 182, 0.15); color: var(--pink);">&#128200;</div>
+                <h3>petgraph</h3>
+                <p>Dependency graph with topological sort, cycle detection, and orphan analysis.</p>
+            </div>
+            <div class="stack-card">
+                <div class="stack-icon" style="background: rgba(124, 91, 240, 0.15); color: var(--accent-light);">&#128187;</div>
+                <h3>clap</h3>
+                <p>CLI parsing with derive macros. Shell completions for bash, zsh, and fish.</p>
+            </div>
+            <div class="stack-card">
+                <div class="stack-icon" style="background: rgba(45, 212, 191, 0.15); color: var(--teal);">&#128230;</div>
+                <h3>264 Tests</h3>
+                <p>Comprehensive unit tests across all core modules. CI runs fmt, clippy, and tests on every push.</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- CTA -->
+    <section class="fade-in">
+        <div class="cta-box">
+            <h2>Ready to try Zero Layer?</h2>
+            <p>One curl command and you're up and running. Works on any Linux distro.</p>
+            <div class="hero-buttons">
+                <a href="https://github.com/supercosti21/zero_layer/releases/latest" class="btn btn-primary">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    Download Latest Release
+                </a>
+                <a href="https://github.com/supercosti21/zero_layer" class="btn btn-secondary" target="_blank" rel="noopener">
+                    View on GitHub
+                </a>
+            </div>
+        </div>
+    </section>
+
+</div>
+
+<!-- Footer -->
+<footer>
+    <div class="container">
+        Built by <a href="https://github.com/supercosti21" target="_blank" rel="noopener">supercosti21</a> &mdash; Licensed under <a href="https://github.com/supercosti21/zero_layer/blob/main/LICENSE" target="_blank" rel="noopener">GPLv3</a>
+    </div>
+</footer>
+
+<script>
+    // Scroll nav border
+    const nav = document.getElementById('nav');
+    window.addEventListener('scroll', () => {
+        nav.classList.toggle('scrolled', window.scrollY > 10);
+    });
+
+    // Fade in on scroll
+    const observer = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+            if (entry.isIntersecting) {
+                entry.target.classList.add('visible');
+            }
+        });
+    }, { threshold: 0.1, rootMargin: '0px 0px -40px 0px' });
+
+    document.querySelectorAll('.fade-in').forEach(el => observer.observe(el));
+</script>
+
+</body>
+</html>
