@@ -63,22 +63,75 @@ fn gpg_available() -> bool {
         .unwrap_or(false)
 }
 
-/// Verify a GPG detached signature against a file
-pub fn verify_gpg_signature(file_path: &Path, sig_path: &Path) -> ZlResult<bool> {
+/// Outcome of checking a detached GPG signature.
+#[derive(Debug, PartialEq)]
+pub enum GpgOutcome {
+    /// The signature matches the file.
+    Valid,
+    /// The signature does not match — the file may have been tampered with.
+    Invalid,
+    /// The signature could not be checked at all.
+    Unverified(String),
+}
+
+/// Verify a GPG detached signature against a file.
+///
+/// A non-zero exit from `gpg --verify` does **not** mean the signature is bad:
+/// it also covers "the signing key is not in the keyring", which is the normal
+/// case for distro packages, whose keys live in the package manager's own
+/// keyring (e.g. /etc/pacman.d/gnupg) rather than the user's. The two are told
+/// apart through the machine-readable status output, because treating a missing
+/// key as tampering blocks every install it touches.
+pub fn verify_gpg_signature(file_path: &Path, sig_path: &Path) -> ZlResult<GpgOutcome> {
     if !gpg_available() {
-        tracing::warn!("gpg not available on this system, skipping signature check");
-        return Ok(true);
+        return Ok(GpgOutcome::Unverified(
+            "gpg is not installed on this system".into(),
+        ));
     }
 
     let output = std::process::Command::new("gpg")
+        .arg("--status-fd")
+        .arg("1")
         .arg("--verify")
         .arg(sig_path)
         .arg(file_path)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
         .output()?;
 
-    Ok(output.status.success())
+    Ok(classify_gpg_status(&String::from_utf8_lossy(
+        &output.stdout,
+    )))
+}
+
+/// Map gpg's `--status-fd` output onto a [`GpgOutcome`].
+fn classify_gpg_status(status: &str) -> GpgOutcome {
+    let has = |token: &str| {
+        status
+            .lines()
+            .any(|line| line.starts_with(&format!("[GNUPG:] {}", token)))
+    };
+
+    // A bad signature is conclusive and takes precedence over everything else
+    if has("BADSIG") {
+        return GpgOutcome::Invalid;
+    }
+    if has("GOODSIG") || has("VALIDSIG") {
+        return GpgOutcome::Valid;
+    }
+    // Signed by a key we do have, but one that is no longer current. The
+    // signature itself is intact, so this is not tampering.
+    if has("EXPKEYSIG") {
+        return GpgOutcome::Unverified("the signing key has expired".into());
+    }
+    if has("REVKEYSIG") {
+        return GpgOutcome::Unverified("the signing key was revoked".into());
+    }
+    if has("NO_PUBKEY") || has("ERRSIG") {
+        return GpgOutcome::Unverified("the signing key is not in the local keyring".into());
+    }
+
+    GpgOutcome::Unverified("gpg returned no usable verification status".into())
 }
 
 /// Try to download a .sig file for a given package URL.
@@ -156,15 +209,24 @@ pub fn verify_package(
                     .unwrap_or_else(|| "sig".into()),
             );
             std::fs::write(&sig_path, &sig_bytes)?;
-            let ok = verify_gpg_signature(file_path, &sig_path)?;
+            let outcome = verify_gpg_signature(file_path, &sig_path)?;
             let _ = std::fs::remove_file(&sig_path);
-            if ok {
-                (Some(true), "GPG signature verified")
-            } else {
-                return Err(ZlError::GpgVerification {
-                    path: file_path.to_path_buf(),
-                    message: "Detached signature verification failed".into(),
-                });
+            match outcome {
+                GpgOutcome::Valid => (Some(true), "GPG signature verified"),
+                GpgOutcome::Invalid => {
+                    return Err(ZlError::GpgVerification {
+                        path: file_path.to_path_buf(),
+                        message: "Detached signature does not match the downloaded file".into(),
+                    });
+                }
+                GpgOutcome::Unverified(reason) => {
+                    tracing::warn!(
+                        "Could not verify the GPG signature of {}: {}",
+                        file_path.display(),
+                        reason
+                    );
+                    (None, "GPG signature present but not verified")
+                }
             }
         }
         Ok(None) => (None, "No GPG signature available"),
@@ -213,6 +275,57 @@ mod tests {
             hex.chars()
                 .all(|c| c.is_ascii_hexdigit() && !c.is_uppercase())
         );
+    }
+
+    #[test]
+    fn test_gpg_status_good_signature_is_valid() {
+        let status = "[GNUPG:] NEWSIG\n\
+             [GNUPG:] GOODSIG 1234ABCD Some Packager <p@example.com>\n\
+             [GNUPG:] VALIDSIG 05C7775A 2026-01-01\n";
+        assert_eq!(classify_gpg_status(status), GpgOutcome::Valid);
+    }
+
+    #[test]
+    fn test_gpg_status_bad_signature_is_invalid() {
+        // The one case that must stay a hard error
+        let status = "[GNUPG:] NEWSIG\n[GNUPG:] BADSIG 1234ABCD Some Packager\n";
+        assert_eq!(classify_gpg_status(status), GpgOutcome::Invalid);
+    }
+
+    #[test]
+    fn test_gpg_status_missing_key_is_unverified_not_invalid() {
+        // Regression: this is what every Arch package produces, because the
+        // developer keys live in pacman's keyring rather than the user's.
+        // Treating it as tampering made `zl install --from pacman` impossible.
+        let status = "[GNUPG:] NEWSIG\n\
+             [GNUPG:] ERRSIG 9D4C5AA15426DA0A 22 10 00 1781511300 9\n\
+             [GNUPG:] NO_PUBKEY 9D4C5AA15426DA0A\n";
+        assert!(matches!(
+            classify_gpg_status(status),
+            GpgOutcome::Unverified(_)
+        ));
+    }
+
+    #[test]
+    fn test_gpg_status_expired_key_is_unverified() {
+        let status = "[GNUPG:] EXPKEYSIG 1234ABCD Some Packager\n";
+        assert!(matches!(
+            classify_gpg_status(status),
+            GpgOutcome::Unverified(_)
+        ));
+    }
+
+    #[test]
+    fn test_gpg_status_bad_signature_wins_over_other_tokens() {
+        // A forged file signed with an also-unknown key must not be downgraded
+        // to "unverified" just because NO_PUBKEY is present too
+        let status = "[GNUPG:] NO_PUBKEY 9D4C5AA1\n[GNUPG:] BADSIG 1234ABCD Someone\n";
+        assert_eq!(classify_gpg_status(status), GpgOutcome::Invalid);
+    }
+
+    #[test]
+    fn test_gpg_status_empty_output_is_unverified() {
+        assert!(matches!(classify_gpg_status(""), GpgOutcome::Unverified(_)));
     }
 
     #[test]
