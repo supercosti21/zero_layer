@@ -45,6 +45,16 @@ pub fn is_elf_file(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// Is DF_1_PIE set in DT_FLAGS_1? Marks an ET_DYN object as an executable
+/// rather than a shared library.
+fn is_pie(elf: &goblin::elf::Elf) -> bool {
+    use goblin::elf::dynamic::DF_1_PIE;
+
+    elf.dynamic
+        .as_ref()
+        .is_some_and(|dynamic| dynamic.info.flags_1 & DF_1_PIE != 0)
+}
+
 /// Analyze a single ELF file, extracting all relevant metadata
 pub fn analyze(path: &Path) -> ZlResult<ElfInfo> {
     use goblin::elf::{Elf, header};
@@ -64,8 +74,12 @@ pub fn analyze(path: &Path) -> ZlResult<ElfInfo> {
             }
         }
         header::ET_DYN => {
-            // PIE executables are also ET_DYN; distinguish by presence of PT_INTERP
-            if elf.interpreter.is_some() {
+            // PIE executables are also ET_DYN. A dynamically linked one has a
+            // PT_INTERP; a static-pie has none and is otherwise shaped exactly
+            // like a shared library, so it is told apart by DF_1_PIE — the same
+            // flag file(1) uses to print "pie executable". musl release builds,
+            // which pick_best_asset prefers, are typically static-pie.
+            if elf.interpreter.is_some() || is_pie(&elf) {
                 ElfType::Executable
             } else {
                 ElfType::SharedLibrary
@@ -209,6 +223,39 @@ mod tests {
             !info.needed_libs.is_empty(),
             "/bin/sh should have DT_NEEDED entries"
         );
+    }
+
+    /// The DF_1_PIE check that rescues static-pie executables must not drag
+    /// ordinary shared libraries along with it: they are ET_DYN and have no
+    /// PT_INTERP either, and misclassifying one would put it on PATH.
+    #[test]
+    fn test_analyze_shared_library_is_not_an_executable() {
+        let libs: Vec<PathBuf> = ["/usr/lib", "/usr/lib/x86_64-linux-gnu", "/lib"]
+            .iter()
+            .filter_map(|dir| std::fs::read_dir(dir).ok())
+            .flatten()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.is_file() && is_elf_file(p))
+            .filter_map(|p| analyze(&p).ok())
+            .filter(|i| i.soname.is_some())
+            .take(20)
+            .map(|i| i.path)
+            .collect();
+
+        assert!(
+            !libs.is_empty(),
+            "expected to find shared libraries in the system lib dirs"
+        );
+        for lib in libs {
+            let info = analyze(&lib).unwrap();
+            assert_eq!(
+                info.elf_type,
+                ElfType::SharedLibrary,
+                "{} has a SONAME and should be a shared library",
+                lib.display()
+            );
+        }
     }
 
     #[test]
