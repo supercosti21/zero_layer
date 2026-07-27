@@ -170,7 +170,7 @@ impl SourcePlugin for PacmanPlugin {
 
         Ok(results
             .into_iter()
-            .map(|(repo, entry)| database::entry_to_candidate(&entry, mirror, &repo))
+            .map(|(repo, entry)| database::entry_to_candidate(&entry, mirror, &repo, &self.arch))
             .collect())
     }
 
@@ -178,7 +178,9 @@ impl SourcePlugin for PacmanPlugin {
         // First try exact name match
         if let Some((repo, entry)) = self.find_in_db(name, version) {
             let mirror = self.primary_mirror()?;
-            return Ok(Some(database::entry_to_candidate(&entry, mirror, &repo)));
+            return Ok(Some(database::entry_to_candidate(
+                &entry, mirror, &repo, &self.arch,
+            )));
         }
 
         // Fall back to checking provides (virtual packages)
@@ -187,7 +189,9 @@ impl SourcePlugin for PacmanPlugin {
         {
             let mirror = self.primary_mirror()?;
             tracing::debug!("Resolved '{}' via provides from '{}'", name, entry.name);
-            return Ok(Some(database::entry_to_candidate(&entry, mirror, &repo)));
+            return Ok(Some(database::entry_to_candidate(
+                &entry, mirror, &repo, &self.arch,
+            )));
         }
 
         Ok(None)

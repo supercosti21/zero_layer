@@ -205,9 +205,18 @@ fn apply_section(entry: &mut DbEntry, section: &str, values: &[String]) {
     }
 }
 
-/// Convert a DbEntry to a PackageCandidate
-pub fn entry_to_candidate(entry: &DbEntry, mirror: &Mirror, repo: &str) -> PackageCandidate {
-    let download_url = mirror::package_url(mirror, repo, &entry.arch, &entry.filename);
+/// Convert a DbEntry to a PackageCandidate.
+///
+/// `repo_arch` is the architecture of the repository being served, not the
+/// package's own: Arch mirrors have no `os/any/` directory, so `arch = any`
+/// packages are served from the host arch tree alongside everything else.
+pub fn entry_to_candidate(
+    entry: &DbEntry,
+    mirror: &Mirror,
+    repo: &str,
+    repo_arch: &str,
+) -> PackageCandidate {
+    let download_url = mirror::package_url(mirror, repo, repo_arch, &entry.filename);
 
     PackageCandidate {
         name: entry.name.clone(),
@@ -270,5 +279,49 @@ abc123def456
         assert_eq!(entry.depends[0], "dbus-glib");
         assert_eq!(entry.installed_size, 238000000);
         assert_eq!(entry.sha256sum, "abc123def456");
+    }
+
+    fn desc_entry(name: &str, arch: &str, filename: &str) -> DbEntry {
+        let mut entry = parse_desc("%NAME%\nplaceholder\n");
+        entry.name = name.into();
+        entry.arch = arch.into();
+        entry.filename = filename.into();
+        entry
+    }
+
+    #[test]
+    fn test_any_arch_package_downloads_from_the_host_arch_tree() {
+        // Regression: using entry.arch produced .../core/os/any/..., which every
+        // Arch mirror answers with a 404 — there is no os/any directory.
+        let mirror = Mirror {
+            url: "https://geo.mirror.pkgbuild.com".into(),
+            country: None,
+        };
+        let entry = desc_entry("iana-etc", "any", "iana-etc-20260530-1-any.pkg.tar.zst");
+
+        let candidate = entry_to_candidate(&entry, &mirror, "core", "x86_64");
+
+        assert_eq!(
+            candidate.download_url,
+            "https://geo.mirror.pkgbuild.com/core/os/x86_64/iana-etc-20260530-1-any.pkg.tar.zst"
+        );
+        // The candidate still reports the package's own architecture
+        assert_eq!(candidate.arch, "any");
+    }
+
+    #[test]
+    fn test_native_arch_package_url_is_unchanged() {
+        let mirror = Mirror {
+            url: "https://geo.mirror.pkgbuild.com".into(),
+            country: None,
+        };
+        let entry = desc_entry("firefox", "x86_64", "firefox-120.0-1-x86_64.pkg.tar.zst");
+
+        let candidate = entry_to_candidate(&entry, &mirror, "extra", "x86_64");
+
+        assert_eq!(
+            candidate.download_url,
+            "https://geo.mirror.pkgbuild.com/extra/os/x86_64/firefox-120.0-1-x86_64.pkg.tar.zst"
+        );
     }
 }

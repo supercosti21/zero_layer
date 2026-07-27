@@ -14,6 +14,7 @@
 //! XBPS repodata is a plist (property list) file compressed with zstd.
 //! For simplicity we parse the repodata index as a simple key-value format.
 
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 
@@ -88,15 +89,171 @@ impl XbpsPlugin {
     }
 }
 
-/// Parse XBPS repodata (simplified plist-like format).
-/// XBPS repodata is actually a binary plist compressed with zstd.
-/// We parse a simplified version extracting package metadata.
+/// Parse XBPS repodata: a zstd-compressed tar holding `index.plist`.
+///
+/// Despite the name, the plist is the XML flavour rather than Apple's binary
+/// one, so quick-xml is enough and no plist crate is needed.
 fn parse_repodata(data: &[u8], repo: &str, arch: &str) -> Vec<XbpsEntry> {
-    // XBPS repodata is a binary plist. For now we create stub entries
-    // from the raw data by looking for known patterns.
-    // A full implementation would use a proper plist parser.
-    let _ = (data, repo, arch);
-    Vec::new()
+    let Some(plist) = read_index_plist(data) else {
+        tracing::warn!("XBPS: repodata for {} has no index.plist", repo);
+        return Vec::new();
+    };
+
+    match parse_index_plist(&plist, repo, arch) {
+        Ok(entries) => entries,
+        Err(e) => {
+            tracing::warn!("XBPS: could not parse index.plist for {}: {}", repo, e);
+            Vec::new()
+        }
+    }
+}
+
+/// Pull `index.plist` out of the zstd-compressed repodata tarball.
+fn read_index_plist(data: &[u8]) -> Option<Vec<u8>> {
+    let decoded = zstd::stream::decode_all(std::io::Cursor::new(data)).ok()?;
+    let mut tar = tar::Archive::new(std::io::Cursor::new(decoded));
+
+    for entry in tar.entries().ok()? {
+        let mut entry = entry.ok()?;
+        let is_index = entry
+            .path()
+            .map(|p| p.as_os_str() == "index.plist")
+            .unwrap_or(false);
+        if is_index {
+            let mut content = Vec::new();
+            entry.read_to_end(&mut content).ok()?;
+            return Some(content);
+        }
+    }
+    None
+}
+
+/// The plist is one top-level `<dict>` mapping a package name to a `<dict>` of
+/// its metadata, so parsing tracks the nesting depth to tell the package names
+/// (depth 1) apart from the metadata keys inside them (depth 2).
+fn parse_index_plist(plist: &[u8], repo: &str, arch: &str) -> Result<Vec<XbpsEntry>, String> {
+    use quick_xml::Reader;
+    use quick_xml::events::Event;
+
+    let mut xml = Reader::from_reader(std::io::BufReader::new(plist));
+    let mut buf = Vec::new();
+
+    let mut entries = Vec::new();
+    let mut depth = 0usize;
+    let mut current: Option<XbpsEntry> = None;
+    let mut key = String::new();
+    let mut text = String::new();
+    // The package file is named after pkgver *and* architecture, which arrive
+    // as separate keys, so the name is assembled once the dict closes rather
+    // than relying on the order the two happen to appear in.
+    let mut pkgver = String::new();
+    // Values inside <array> belong to the array's key, not to a new one
+    let mut in_array = false;
+
+    loop {
+        match xml.read_event_into(&mut buf) {
+            Ok(Event::Eof) => break,
+            Ok(Event::Start(e)) => {
+                match e.name().as_ref() {
+                    b"dict" => {
+                        depth += 1;
+                        if depth == 2 {
+                            // Entering a package's metadata; `key` holds its name
+                            current = Some(new_entry(&key, repo, arch));
+                            pkgver.clear();
+                        }
+                    }
+                    b"array" => in_array = true,
+                    b"key" => text.clear(),
+                    b"string" | b"integer" => text.clear(),
+                    _ => {}
+                }
+            }
+            Ok(Event::Text(e)) => {
+                text.push_str(&e.xml10_content().unwrap_or_default());
+            }
+            Ok(Event::GeneralRef(e)) => {
+                // Maintainer names carry &lt;mail&gt;, dependencies carry &gt;=
+                if let Ok(Some(c)) = e.resolve_char_ref() {
+                    text.push(c);
+                } else if let Ok(name) = e.decode() {
+                    match name.as_ref() {
+                        "amp" => text.push('&'),
+                        "lt" => text.push('<'),
+                        "gt" => text.push('>'),
+                        "quot" => text.push('"'),
+                        "apos" => text.push('\''),
+                        _ => {}
+                    }
+                }
+            }
+            Ok(Event::End(e)) => match e.name().as_ref() {
+                b"key" => key = text.trim().to_string(),
+                b"array" => in_array = false,
+                b"string" | b"integer" => {
+                    if key == "pkgver" {
+                        pkgver = text.trim().to_string();
+                    }
+                    if let Some(entry) = current.as_mut() {
+                        apply_field(entry, &key, text.trim(), in_array);
+                    }
+                    text.clear();
+                }
+                b"dict" => {
+                    if depth == 2
+                        && let Some(mut entry) = current.take()
+                        && !entry.name.is_empty()
+                    {
+                        if !pkgver.is_empty() {
+                            entry.filename = format!("{}.{}.xbps", pkgver, entry.arch);
+                        }
+                        entries.push(entry);
+                    }
+                    depth = depth.saturating_sub(1);
+                }
+                _ => {}
+            },
+            Err(e) => return Err(e.to_string()),
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    Ok(entries)
+}
+
+fn new_entry(name: &str, repo: &str, arch: &str) -> XbpsEntry {
+    XbpsEntry {
+        name: name.to_string(),
+        version: String::new(),
+        arch: arch.to_string(),
+        description: String::new(),
+        installed_size: 0,
+        depends: Vec::new(),
+        provides: Vec::new(),
+        filename: String::new(),
+        repo: repo.to_string(),
+    }
+}
+
+/// Assign one plist value to the entry it belongs to.
+fn apply_field(entry: &mut XbpsEntry, key: &str, value: &str, in_array: bool) {
+    match key {
+        "architecture" => entry.arch = value.to_string(),
+        "installed_size" => entry.installed_size = value.parse().unwrap_or(0),
+        "short_desc" => entry.description = value.to_string(),
+        // pkgver is "<name>-<version>", e.g. "jq-1.8.2_1". The package's own
+        // name may contain hyphens, so split from the right.
+        "pkgver" => {
+            entry.version = value
+                .rsplit_once('-')
+                .map(|(_, version)| version.to_string())
+                .unwrap_or_else(|| value.to_string());
+        }
+        "run_depends" if in_array => entry.depends.push(value.to_string()),
+        "provides" if in_array => entry.provides.push(value.to_string()),
+        _ => {}
+    }
 }
 
 impl SourcePlugin for XbpsPlugin {
@@ -333,5 +490,95 @@ mod tests {
         let url = p.repodata_url("current");
         assert!(url.contains("current"));
         assert!(url.ends_with("-repodata"));
+    }
+
+    const SAMPLE_PLIST: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple Computer//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>jq</key>
+	<dict>
+		<key>architecture</key>
+		<string>x86_64</string>
+		<key>installed_size</key>
+		<integer>566717</integer>
+		<key>maintainer</key>
+		<string>Leah &lt;leah@vuxu.org&gt;</string>
+		<key>pkgver</key>
+		<string>jq-1.8.2_1</string>
+		<key>provides</key>
+		<array>
+			<string>cmd:jq-1.8.2_1</string>
+		</array>
+		<key>run_depends</key>
+		<array>
+			<string>glibc&gt;=2.41_1</string>
+			<string>oniguruma&gt;=6.8.1_1</string>
+		</array>
+		<key>short_desc</key>
+		<string>Command-line JSON processor</string>
+	</dict>
+	<key>python3-foo-bar</key>
+	<dict>
+		<key>architecture</key>
+		<string>noarch</string>
+		<key>pkgver</key>
+		<string>python3-foo-bar-2.1_3</string>
+		<key>short_desc</key>
+		<string>Hyphenated name</string>
+	</dict>
+</dict>
+</plist>"#;
+
+    #[test]
+    fn test_parse_index_plist_reads_packages() {
+        let entries = parse_index_plist(SAMPLE_PLIST.as_bytes(), "current", "x86_64").unwrap();
+        assert_eq!(entries.len(), 2);
+
+        let jq = &entries[0];
+        assert_eq!(jq.name, "jq");
+        assert_eq!(jq.version, "1.8.2_1");
+        assert_eq!(jq.arch, "x86_64");
+        assert_eq!(jq.description, "Command-line JSON processor");
+        assert_eq!(jq.installed_size, 566717);
+        assert_eq!(jq.repo, "current");
+    }
+
+    #[test]
+    fn test_parse_index_plist_builds_package_filename() {
+        let entries = parse_index_plist(SAMPLE_PLIST.as_bytes(), "current", "x86_64").unwrap();
+        // <pkgver>.<arch>.xbps, using the package's own architecture
+        assert_eq!(entries[0].filename, "jq-1.8.2_1.x86_64.xbps");
+        assert_eq!(entries[1].filename, "python3-foo-bar-2.1_3.noarch.xbps");
+    }
+
+    #[test]
+    fn test_parse_index_plist_splits_version_from_the_right() {
+        let entries = parse_index_plist(SAMPLE_PLIST.as_bytes(), "current", "x86_64").unwrap();
+        // A hyphenated package name must not be mistaken for the version
+        assert_eq!(entries[1].name, "python3-foo-bar");
+        assert_eq!(entries[1].version, "2.1_3");
+    }
+
+    #[test]
+    fn test_parse_index_plist_collects_arrays() {
+        let entries = parse_index_plist(SAMPLE_PLIST.as_bytes(), "current", "x86_64").unwrap();
+        // Entities inside array values must survive parsing
+        assert_eq!(
+            entries[0].depends,
+            vec!["glibc>=2.41_1", "oniguruma>=6.8.1_1"]
+        );
+        assert_eq!(entries[0].provides, vec!["cmd:jq-1.8.2_1"]);
+        // A package with no arrays gets empty vectors, not the previous one's
+        assert!(entries[1].depends.is_empty());
+        assert!(entries[1].provides.is_empty());
+    }
+
+    #[test]
+    fn test_parse_index_plist_ignores_metadata_keys_as_packages() {
+        let entries = parse_index_plist(SAMPLE_PLIST.as_bytes(), "current", "x86_64").unwrap();
+        // "architecture", "pkgver" etc. are keys inside a package, not packages
+        let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, vec!["jq", "python3-foo-bar"]);
     }
 }

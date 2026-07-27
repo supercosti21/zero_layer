@@ -4,7 +4,7 @@
 //! ```toml
 //! [plugins.apk]
 //! mirror = "https://dl-cdn.alpinelinux.org/alpine"
-//! branch = "v3.20"
+//! branch = "latest-stable"
 //! repos = ["main", "community"]
 //! arch = "x86_64"
 //! ```
@@ -21,7 +21,7 @@ use crate::error::{ZlError, ZlResult};
 use crate::plugin::{ExtractedPackage, PackageCandidate, SourcePlugin};
 
 const DEFAULT_MIRROR: &str = "https://dl-cdn.alpinelinux.org/alpine";
-const DEFAULT_BRANCH: &str = "v3.20";
+const DEFAULT_BRANCH: &str = "latest-stable";
 
 /// A package entry parsed from APKINDEX.
 #[derive(Debug, Clone)]
@@ -98,6 +98,32 @@ impl ApkAlpinePlugin {
             checksum: None,
         }
     }
+}
+
+/// Pull the `APKINDEX` member out of an APKINDEX.tar.gz.
+///
+/// The file is not a single gzip stream but several concatenated ones: the
+/// detached signature comes first, the tar holding APKINDEX after it.
+/// `GzDecoder` stops at the end of the first member, so it only ever sees
+/// `.SIGN.RSA.*` and finds no index at all — which is why this needs
+/// `MultiGzDecoder`.
+fn read_apkindex(bytes: &[u8]) -> Option<Vec<u8>> {
+    let gz = flate2::read::MultiGzDecoder::new(std::io::Cursor::new(bytes));
+    let mut tar = tar::Archive::new(gz);
+
+    for entry in tar.entries().ok()? {
+        let mut entry = entry.ok()?;
+        let is_index = entry
+            .path()
+            .map(|p| p.as_os_str() == "APKINDEX")
+            .unwrap_or(false);
+        if is_index {
+            let mut content = Vec::new();
+            entry.read_to_end(&mut content).ok()?;
+            return Some(content);
+        }
+    }
+    None
 }
 
 /// Parse APKINDEX content (key=value blocks separated by blank lines)
@@ -264,8 +290,10 @@ impl SourcePlugin for ApkAlpinePlugin {
         // The data section is another tar.gz inside
         let extract_dir = tempfile::tempdir()?;
 
+        // Same concatenated-gzip layout as APKINDEX: signature, control and
+        // data are separate members, and the payload lives in the last one.
         let file = std::fs::File::open(archive_path)?;
-        let gz = flate2::read::GzDecoder::new(file);
+        let gz = flate2::read::MultiGzDecoder::new(file);
         let mut tar = tar::Archive::new(gz);
         tar.set_preserve_permissions(false);
         tar.unpack(extract_dir.path())
@@ -312,24 +340,12 @@ impl SourcePlugin for ApkAlpinePlugin {
                 let _ = std::fs::write(&cache_path, &bytes);
             }
 
-            // APKINDEX.tar.gz contains an APKINDEX file inside
-            let gz = flate2::read::GzDecoder::new(std::io::Cursor::new(&bytes));
-            let mut tar = tar::Archive::new(gz);
-            for entry in tar.entries().map_err(|e| ZlError::Archive(e.to_string()))? {
-                let mut entry = entry.map_err(|e| ZlError::Archive(e.to_string()))?;
-                let path = entry
-                    .path()
-                    .map_err(|e| ZlError::Archive(e.to_string()))?
-                    .to_string_lossy()
-                    .to_string();
-                if path == "APKINDEX" {
-                    let mut content = Vec::new();
-                    entry
-                        .read_to_end(&mut content)
-                        .map_err(|e| ZlError::Archive(e.to_string()))?;
-                    let entries = parse_apkindex(std::io::Cursor::new(content), repo)?;
-                    all_entries.extend(entries);
-                    break;
+            match read_apkindex(&bytes) {
+                Some(content) => {
+                    all_entries.extend(parse_apkindex(std::io::Cursor::new(content), repo)?);
+                }
+                None => {
+                    tracing::warn!("Alpine APK: no APKINDEX member in the index for {}", repo);
                 }
             }
         }
@@ -422,14 +438,14 @@ mod tests {
         let p = ApkAlpinePlugin::new();
         assert_eq!(p.name(), "apk");
         assert_eq!(p.display_name(), "Alpine Linux (APK)");
-        assert_eq!(p.branch, "v3.20");
+        assert_eq!(p.branch, "latest-stable");
     }
 
     #[test]
     fn test_apk_index_url() {
         let p = ApkAlpinePlugin::new();
         let url = p.index_url("main");
-        assert!(url.contains("v3.20/main"));
+        assert!(url.contains("latest-stable/main"));
         assert!(url.ends_with("APKINDEX.tar.gz"));
     }
 
@@ -443,5 +459,73 @@ mod tests {
         assert_eq!(entries[0].version, "8.5.0-r0");
         assert_eq!(entries[0].depends, vec!["ca-certificates", "libcurl"]);
         assert_eq!(entries[1].name, "wget");
+    }
+
+    fn gzip(data: &[u8]) -> Vec<u8> {
+        use flate2::{Compression, write::GzEncoder};
+        use std::io::Write;
+
+        let mut enc = GzEncoder::new(Vec::new(), Compression::fast());
+        enc.write_all(data).unwrap();
+        enc.finish().unwrap()
+    }
+
+    /// One tar member: header plus its body padded to a 512-byte boundary, and
+    /// deliberately no end-of-archive marker.
+    fn tar_member(name: &str, body: &[u8]) -> Vec<u8> {
+        let mut header = tar::Header::new_gnu();
+        header.set_path(name).unwrap();
+        header.set_size(body.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+
+        let mut out = header.as_bytes().to_vec();
+        out.extend_from_slice(body);
+        out.extend(std::iter::repeat_n(0u8, (512 - body.len() % 512) % 512));
+        out
+    }
+
+    /// Build an APKINDEX.tar.gz the way Alpine does: the signature member in
+    /// its own gzip stream with no end-of-archive marker, so the tar stream
+    /// continues into the second gzip stream holding APKINDEX.
+    fn make_apkindex_tar_gz(index_body: &[u8]) -> Vec<u8> {
+        let mut index = tar_member("APKINDEX", index_body);
+        index.extend(std::iter::repeat_n(0u8, 1024)); // end of archive
+
+        let mut out = gzip(&tar_member(".SIGN.RSA.alpine-devel.rsa.pub", b"signature"));
+        out.extend(gzip(&index));
+        out
+    }
+
+    #[test]
+    fn test_read_apkindex_reaches_past_the_signature_stream() {
+        // Regression: GzDecoder stopped after the signature member, so the
+        // index was never found and every sync loaded 0 packages.
+        let archive = make_apkindex_tar_gz(b"P:jq\nV:1.7.1-r0\n");
+        let content = read_apkindex(&archive).expect("APKINDEX should be found");
+        assert_eq!(content, b"P:jq\nV:1.7.1-r0\n");
+    }
+
+    #[test]
+    fn test_read_apkindex_parses_into_entries() {
+        let body = b"P:jq\nV:1.7.1-r0\nA:x86_64\nI:123\nT:JSON processor\nD:so:libc.musl-x86_64.so.1\np:cmd:jq\n\n";
+        let archive = make_apkindex_tar_gz(body);
+        let content = read_apkindex(&archive).unwrap();
+        let entries = parse_apkindex(std::io::Cursor::new(content), "main").unwrap();
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "jq");
+        assert_eq!(entries[0].version, "1.7.1-r0");
+        assert_eq!(entries[0].installed_size, 123);
+        assert_eq!(entries[0].description, "JSON processor");
+        assert_eq!(entries[0].repo, "main");
+    }
+
+    #[test]
+    fn test_read_apkindex_returns_none_without_an_index() {
+        let mut only_signature = tar_member(".SIGN.RSA.key", b"signature");
+        only_signature.extend(std::iter::repeat_n(0u8, 1024));
+
+        assert!(read_apkindex(&gzip(&only_signature)).is_none());
     }
 }
