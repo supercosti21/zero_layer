@@ -91,7 +91,7 @@ impl PathMapping {
     /// Remap an arbitrary FHS path to its ZL equivalent
     pub fn remap_path(&self, original: &str) -> String {
         let mut prefixes: Vec<_> = self.prefix_map.iter().collect();
-        prefixes.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+        prefixes.sort_by_key(|(from, _)| std::cmp::Reverse(from.len()));
 
         for (from, to) in &prefixes {
             if original.starts_with(from.as_str()) {

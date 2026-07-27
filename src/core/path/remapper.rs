@@ -9,7 +9,7 @@ pub fn remap_text_file(path: &Path, mapping: &super::PathMapping) -> ZlResult<bo
 
     // Sort by longest prefix first to avoid partial replacements
     let mut prefixes: Vec<_> = mapping.prefix_map.iter().collect();
-    prefixes.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+    prefixes.sort_by_key(|(from, _)| std::cmp::Reverse(from.len()));
 
     for (from, to) in &prefixes {
         modified = modified.replace(from.as_str(), to.as_str());

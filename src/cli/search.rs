@@ -145,7 +145,7 @@ pub fn handle(args: SearchArgs, registry: &PluginRegistry) -> ZlResult<()> {
 
         // Sort by requested order
         match args.sort {
-            SortOrder::Relevance => scored.sort_by(|a, b| b.score.cmp(&a.score)),
+            SortOrder::Relevance => scored.sort_by_key(|s| std::cmp::Reverse(s.score)),
             SortOrder::Name => {
                 scored.sort_by(|a, b| a.candidate.name.cmp(&b.candidate.name));
             }

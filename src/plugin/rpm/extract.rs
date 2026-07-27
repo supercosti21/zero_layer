@@ -49,7 +49,7 @@ pub fn extract_rpm(rpm_path: &Path, dest: &Path) -> ZlResult<Vec<PathBuf>> {
         let zst = zstd::stream::Decoder::new(reader)
             .map_err(|e| ZlError::Archive(format!("zstd error in RPM: {}", e)))?;
         extract_cpio(zst, dest)?
-    } else if magic_buf[0..2] == [b'B', b'Z'] {
+    } else if magic_buf[0..2] == *b"BZ" {
         // bzip2
         let bz = bzip2::read::BzDecoder::new(reader);
         extract_cpio(bz, dest)?
