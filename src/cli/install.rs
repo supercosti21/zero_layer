@@ -781,18 +781,9 @@ fn remove_pkg_lib_symlinks(node: &PackageNode, lib_dir: &Path) -> ZlResult<()> {
 
 /// Find executables inside a package directory and symlink them into bin/.
 pub fn create_bin_symlinks(pkg_dir: &Path, bin_dir: &Path, txn: &mut Transaction) -> ZlResult<()> {
-    let bin_subdirs = [
-        "usr/bin",
-        "usr/sbin",
-        "bin",
-        "sbin",
-        "usr/local/bin",
-        "usr/local/sbin",
-    ];
-
     let mut linked = std::collections::HashSet::new();
 
-    for subdir in &bin_subdirs {
+    for subdir in &crate::core::path::FHS_BIN_DIRS {
         let dir = pkg_dir.join(subdir);
         if !dir.is_dir() {
             continue;

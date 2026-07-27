@@ -5,6 +5,27 @@ use std::path::{Path, PathBuf};
 
 use crate::system::SystemProfile;
 
+/// Directories, relative to a package root, that hold executables meant to be
+/// linked onto PATH.
+///
+/// `cli::install::create_bin_symlinks` links what it finds here, and plugins
+/// use it to decide whether an extracted archive already follows the FHS. Keep
+/// the two in sync by using this constant — a plugin that lays binaries outside
+/// these directories installs them without ever putting them on PATH.
+pub const FHS_BIN_DIRS: [&str; 6] = [
+    "usr/bin",
+    "usr/sbin",
+    "bin",
+    "sbin",
+    "usr/local/bin",
+    "usr/local/sbin",
+];
+
+/// Does this directory already contain an FHS-style executable directory?
+pub fn has_fhs_bin_dir(root: &Path) -> bool {
+    FHS_BIN_DIRS.iter().any(|sub| root.join(sub).is_dir())
+}
+
 /// A complete mapping from source FHS paths to ZL-managed paths
 #[derive(Debug, Clone)]
 pub struct PathMapping {

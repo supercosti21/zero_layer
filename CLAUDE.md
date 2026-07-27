@@ -33,7 +33,7 @@ These rules are **mandatory** for every Claude instance working on this repo.
 cargo build                  # Debug build
 cargo build --release        # Release build
 cargo run -- <subcommand>    # Run (e.g., cargo run -- install firefox)
-cargo test                   # Run all tests (281 tests: 125 bin + 156 lib)
+cargo test                   # Run all tests (303 tests: 136 bin + 167 lib)
 cargo test <name>            # Run a single test by name
 cargo test -- --nocapture    # Run tests with stdout visible
 cargo clippy                 # Lint
@@ -55,9 +55,9 @@ There are no integration tests — all tests are unit tests inside `#[cfg(test)]
 4. **Check conflicts** — 5 types: file ownership, binary name, library soname, declared conflicts, version constraints (`core/conflicts.rs`)
 5. **Download** in parallel (4 threads via `thread::scope`) with progress bars and retry — **step [1/4] indicator**
 6. **Verify** — SHA256 checksum + GPG signature (best-effort) — **step [2/4]**
-7. **Extract** and analyze ELF binaries with `goblin`
+7. **Extract**, **normalize the layout to FHS** if the source ships a non-FHS archive (see below), and analyze ELF binaries with `goblin`
 8. **Arch check** — verify ELF `e_machine` matches host architecture before patching (warning on mismatch)
-9. **Patch** ELF binaries with `elb` (set interpreter, RUNPATH) — **parallel patching** via `thread::scope` for packages with multiple ELFs — **step [3/4]**
+9. **Patch** ELF binaries with `elb` (set interpreter, RUNPATH) — **parallel patching** via `thread::scope` for packages with multiple ELFs — **step [3/4]**. Statically linked binaries (no PT_INTERP, no DT_NEEDED — this includes static-pie, the usual shape of musl release builds) are **skipped**: RUNPATH would be inert, and rewriting their dynamic section corrupts them.
 10. **Remap** FHS paths to ZL-managed directories (`core/path/`)
 11. **Install** atomically — `Transaction` tracks all changes; rollback on any failure
 12. **Post-install checks** — warn about missing shared libraries not found in ZL DB or system lib dirs
@@ -141,6 +141,8 @@ Current plugins (13 total):
 
 Shared modules: `plugin/rpm/` (RPM repodata XML parsing + cpio extraction, used by dnf + zypper).
 
+**Plugins must produce an FHS layout.** `create_bin_symlinks` links only what it finds in `core::path::FHS_BIN_DIRS` (`usr/bin`, `bin`, `sbin`, …), so a plugin that leaves executables anywhere else installs them without ever putting them on PATH — silently, since the install still reports success. Distro plugins get this for free; the `github` plugin normalizes explicitly in `normalize_archive_layout()` (unwrap a lone top-level directory, then move root-level ELF programs into `usr/bin`). Use the `FHS_BIN_DIRS` constant rather than a local copy.
+
 Remote plugin registry: `fetch_remote_registry()` fetches `PluginInfo` from a URL for future plugin marketplace.
 
 ### Source filtering
@@ -217,7 +219,7 @@ Each CLI command lives in `src/cli/<command>.rs` with a `pub fn handle(...)` fun
 
 - **Zero clippy warnings**: `cargo clippy -- -D warnings` passes clean
 - **Zero `cargo fmt` diff**: all code is formatted
-- **281 tests**: comprehensive coverage of core modules (conflicts, ELF, path mapping, DB, graph, transaction, verify, plugins, search scoring, system detection, cache dedup, run, doctor, size, history, why, RPM repodata, NAR, source filtering)
+- **303 tests**: comprehensive coverage of core modules (conflicts, ELF, path mapping, DB, graph, transaction, verify, plugins, search scoring, system detection, cache dedup, run, doctor, size, history, why, RPM repodata, NAR, source filtering)
 
 ### Naming conventions
 
