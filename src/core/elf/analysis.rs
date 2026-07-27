@@ -8,7 +8,6 @@ pub struct ElfInfo {
     /// Path to the ELF file
     pub path: PathBuf,
     /// Whether this is a dynamically linked executable, shared library, or static
-    #[allow(dead_code)]
     pub elf_type: ElfType,
     /// The PT_INTERP path (e.g., /lib64/ld-linux-x86-64.so.2)
     pub interpreter: Option<String>,
