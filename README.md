@@ -299,7 +299,7 @@ All translation happens at install time. Installed packages run with zero overhe
 
 ```bash
 cargo build              # Build
-cargo test               # Run all 281 tests
+cargo test               # Run all 303 tests
 cargo clippy             # Lint
 cargo fmt                # Format
 ```
