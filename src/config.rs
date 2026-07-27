@@ -47,7 +47,7 @@ pub struct GeneralConfig {
 }
 
 /// Configuration for a single plugin
-#[derive(Debug, Deserialize, Serialize, Default, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct PluginConfig {
     /// Whether this plugin is enabled
     #[serde(default = "default_true")]
@@ -58,6 +58,19 @@ pub struct PluginConfig {
     /// Plugin-specific extra settings
     #[serde(flatten)]
     pub extra: HashMap<String, toml::Value>,
+}
+
+/// A plugin with no `[plugins.<name>]` table is enabled. `#[serde(default)]`
+/// only covers a table that exists but omits the key, so the derived `Default`
+/// (`enabled: false`) would silently disable every unconfigured plugin.
+impl Default for PluginConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            cache_dir: PathBuf::new(),
+            extra: HashMap::new(),
+        }
+    }
 }
 
 fn default_true() -> bool {
@@ -115,5 +128,47 @@ impl ZlConfig {
             .as_ref()
             .filter(|s| !s.is_empty())
             .map(|s| s.as_slice())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_unconfigured_plugin_is_enabled() {
+        // Regression: the derived Default gave `enabled: false`, which disabled
+        // every plugin that had no explicit [plugins.<name>] table.
+        let config = ZlConfig::default();
+        assert!(config.plugin_config("github").enabled);
+        assert!(config.plugin_config("pacman").enabled);
+    }
+
+    #[test]
+    fn test_plugin_table_without_enabled_key_defaults_to_enabled() {
+        let config: ZlConfig = toml::from_str("[plugins.github]\n").unwrap();
+        assert!(config.plugin_config("github").enabled);
+    }
+
+    #[test]
+    fn test_plugin_can_be_disabled_explicitly() {
+        let config: ZlConfig = toml::from_str("[plugins.github]\nenabled = false\n").unwrap();
+        assert!(!config.plugin_config("github").enabled);
+        // Other plugins are unaffected
+        assert!(config.plugin_config("apt").enabled);
+    }
+
+    #[test]
+    fn test_enabled_sources_none_when_unset_or_empty() {
+        assert!(ZlConfig::default().enabled_sources().is_none());
+
+        let empty: ZlConfig = toml::from_str("[general]\nsources = []\n").unwrap();
+        assert!(empty.enabled_sources().is_none());
+
+        let filtered: ZlConfig = toml::from_str("[general]\nsources = [\"github\"]\n").unwrap();
+        assert_eq!(
+            filtered.enabled_sources(),
+            Some(&["github".to_string()][..])
+        );
     }
 }
