@@ -24,7 +24,7 @@ elb = "0.4"
 petgraph = "0.8"
 
 # Database (embedded key-value, pure Rust, ACID)
-redb = "2"
+redb = "4"
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
