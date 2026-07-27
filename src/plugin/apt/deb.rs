@@ -179,8 +179,7 @@ pub fn download_deb(
         })?;
 
         if let Some(expected) = expected_sha256 {
-            use sha2::{Digest, Sha256};
-            let actual = format!("{:x}", Sha256::digest(&bytes));
+            let actual = crate::core::verify::sha256_hex(&bytes);
             if actual != expected {
                 return Err(ZlError::ChecksumMismatch {
                     path: dest_path.clone(),
@@ -198,8 +197,7 @@ pub fn download_deb(
 }
 
 fn verify_sha256(path: &Path, expected: &str) -> bool {
-    use sha2::{Digest, Sha256};
     std::fs::read(path)
-        .map(|b| format!("{:x}", Sha256::digest(&b)) == expected)
+        .map(|b| crate::core::verify::sha256_hex(&b) == expected)
         .unwrap_or(false)
 }

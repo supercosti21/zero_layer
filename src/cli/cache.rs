@@ -102,7 +102,6 @@ fn handle_clean(paths: &ZlPaths) -> ZlResult<()> {
 /// Deduplicate identical shared libraries across packages using hardlinks.
 /// Libraries with the same SHA256 hash are hardlinked to save disk space.
 fn handle_dedup(paths: &ZlPaths) -> ZlResult<()> {
-    use sha2::{Digest, Sha256};
     use std::collections::HashMap;
 
     if !paths.packages.is_dir() {
@@ -151,7 +150,7 @@ fn handle_dedup(paths: &ZlPaths) -> ZlResult<()> {
             Ok(d) => d,
             Err(_) => continue,
         };
-        let hash = format!("{:x}", Sha256::digest(&data));
+        let hash = crate::core::verify::sha256_hex(&data);
 
         if let Some((canonical, _)) = seen.get(&hash) {
             // Same content — replace with hardlink
