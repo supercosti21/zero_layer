@@ -33,7 +33,7 @@ These rules are **mandatory** for every Claude instance working on this repo.
 cargo build                  # Debug build
 cargo build --release        # Release build
 cargo run -- <subcommand>    # Run (e.g., cargo run -- install firefox)
-cargo test                   # Run all tests (303 tests: 136 bin + 167 lib)
+cargo test                   # Run all tests (335 tests: 152 bin + 183 lib)
 cargo test <name>            # Run a single test by name
 cargo test -- --nocapture    # Run tests with stdout visible
 cargo clippy                 # Lint
@@ -124,14 +124,17 @@ All plugins implement `SourcePlugin` and are registered in `main.rs`. To add a n
 2. Add `pub mod <name>;` in `src/plugin/mod.rs`
 3. Instantiate and register in `main.rs`'s `run()` function
 
-Current plugins (13 total):
+Current plugins (13 total). **Not all of them work against their live upstreams** —
+`docs/plugin-status.md` records which are verified, which are broken, and the
+diagnosis for each. Check it before touching a plugin or claiming a source works.
+
 - **`pacman`** — Arch Linux repositories (syncs .db files, pkg.tar.zst extraction)
 - **`aur`** — AUR RPC v5 + makepkg (with `-bin` variant discovery)
 - **`apt`** — Debian/Ubuntu (Packages.gz + .deb extraction)
 - **`dnf`** — Fedora/RHEL/CentOS (RPM repodata XML + shared RPM extraction)
 - **`zypper`** — openSUSE/SLES (RPM repodata, shares RPM module with dnf)
 - **`apk`** — Alpine Linux (APKINDEX.tar.gz + .apk tar.gz)
-- **`xbps`** — Void Linux (binary plist repodata + tar.zst)
+- **`xbps`** — Void Linux (XML plist repodata in a zstd tar + tar.zst packages)
 - **`portage`** — Gentoo binhost (Packages index + .tbz2/.gpkg.tar)
 - **`nix`** — Nix packages (search.nixos.org API + NAR archive extraction)
 - **`flatpak`** — Flathub (Flathub API v2 + flatpak CLI)
@@ -219,7 +222,7 @@ Each CLI command lives in `src/cli/<command>.rs` with a `pub fn handle(...)` fun
 
 - **Zero clippy warnings**: `cargo clippy -- -D warnings` passes clean
 - **Zero `cargo fmt` diff**: all code is formatted
-- **303 tests**: comprehensive coverage of core modules (conflicts, ELF, path mapping, DB, graph, transaction, verify, plugins, search scoring, system detection, cache dedup, run, doctor, size, history, why, RPM repodata, NAR, source filtering)
+- **335 tests**: comprehensive coverage of core modules (conflicts, ELF, path mapping, DB, graph, transaction, verify, plugins, search scoring, system detection, cache dedup, run, doctor, size, history, why, RPM repodata, NAR, source filtering)
 
 ### Naming conventions
 
