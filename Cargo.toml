@@ -15,7 +15,7 @@ clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
 
 # ELF analysis (read-only parsing)
-goblin = "0.9"
+goblin = "0.10"
 
 # ELF patching (set interpreter, rpath, runpath)
 elb = "0.4"
@@ -65,16 +65,16 @@ libc = "0.2"
 
 # Plugin: APT (.deb extraction)
 ar = "0.9"
-bzip2 = "0.5"
+bzip2 = "0.6"
 
 # Plugin: GitHub Releases (.zip extraction)
-zip = "2"
+zip = "8"
 
 # Plugin: APT + GitHub (XZ decompression for .tar.xz and Packages.xz)
 xz2 = "0.1"
 
 # Plugin: DNF/Zypper (RPM repodata XML parsing)
-quick-xml = "0.37"
+quick-xml = "0.41"
 
 # Plugin: DNF/Zypper (RPM cpio extraction)
 cpio = "0.4"
