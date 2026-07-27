@@ -33,7 +33,7 @@ These rules are **mandatory** for every Claude instance working on this repo.
 cargo build                  # Debug build
 cargo build --release        # Release build
 cargo run -- <subcommand>    # Run (e.g., cargo run -- install firefox)
-cargo test                   # Run all tests (264 tests: 118 bin + 146 lib)
+cargo test                   # Run all tests (281 tests: 125 bin + 156 lib)
 cargo test <name>            # Run a single test by name
 cargo test -- --nocapture    # Run tests with stdout visible
 cargo clippy                 # Lint
@@ -111,7 +111,7 @@ There are no integration tests — all tests are unit tests inside `#[cfg(test)]
 - **`SourcePlugin` trait** (`plugin/mod.rs`): Interface every package source implements — `name()`, `search()`, `resolve()`, `download()`, `extract()`, `sync()`. Plugins are compile-time modules with trait objects, not dynamic libraries.
 - **`Transaction`** (`core/transaction.rs`): Atomic install — tracks files/dirs/symlinks/DB entries created during install, rolls back everything on failure.
 - **`DepGraph`** (`core/graph/model.rs`): petgraph-based dependency graph with topological sort, cycle detection, orphan detection.
-- **`ZlDatabase`** (`core/db/ops.rs`): redb-based persistent store. Tables: PACKAGES, FILE_OWNERS, LIB_INDEX, DEPENDENCIES, PINNED, PLUGIN_METADATA, HISTORY.
+- **`ZlDatabase`** (`core/db/ops.rs`): redb-based persistent store. Tables: PACKAGES, FILE_OWNERS, LIB_INDEX, DEPENDENCIES, PINNED, PLUGIN_METADATA, HISTORY. Since the redb 4 upgrade a `zl.redb` written by ZL <= 0.2.0 (redb file format v2) cannot be opened; `open()` maps `DatabaseError::UpgradeRequired` to a message telling the user to delete the file and reinstall.
 - **`PathMapping`** (`core/path/mod.rs`): Dynamic FHS-to-ZL path translation using SystemProfile.
 - **`PackageCandidate` / `ExtractedPackage`** (`plugin/mod.rs`): Common types shared across all plugins for package metadata and extracted content.
 - **`PluginInfo`** (`plugin/mod.rs`): Plugin metadata for the remote plugin registry.
@@ -156,6 +156,8 @@ Users control which plugins ZL loads via three mechanisms:
 3. **`--from` flag** (per-command): `--from pacman,apt` (comma-separated list)
 4. **First-run wizard**: on first launch (no config.toml), auto-detects distro and lets user pick sources interactively
 
+`PluginConfig` implements `Default` **by hand** with `enabled: true`. Do not replace it with `#[derive(Default)]`: `plugin_config()` falls back to `Default::default()` for every plugin without a `[plugins.<name>]` table, and the derived `false` silently prevented `main.rs` from registering any plugin at all.
+
 ### Command dispatch pattern
 
 Each CLI command lives in `src/cli/<command>.rs` with a `pub fn handle(...)` function. Most `handle` functions receive the parsed args struct plus an `AppContext` reference (defined in `cli/mod.rs`), which bundles shared state: `ZlPaths`, `ZlDatabase`, `PluginRegistry`, `SystemProfile`, and flags (`auto_yes`, `dry_run`, `skip_verify`). Commands are dispatched via a `match` in `main.rs`.
@@ -172,7 +174,7 @@ Each CLI command lives in `src/cli/<command>.rs` with a `pub fn handle(...)` fun
 
 ### Key design constraints
 
-- **Single binary, zero C deps**: redb over SQLite, elb over patchelf, no tokio (thread::scope for parallelism)
+- **Single binary, zero C deps**: redb over SQLite, elb over patchelf, no tokio (thread::scope for parallelism), rustls over OpenSSL (reqwest 0.13's default — `openssl-sys` is not in the dependency tree)
 - **Dynamic detection over hardcoded paths**: interpreter from /bin/sh's PT_INTERP, lib dirs from ldconfig + ld.so.conf
 - **RUNPATH over RPATH**: modern standard, respects LD_LIBRARY_PATH
 - **Atomic transactions**: every install is wrapped; failure = full rollback
@@ -201,11 +203,11 @@ Each CLI command lives in `src/cli/<command>.rs` with a `pub fn handle(...)` fun
 | `goblin` | Read ELF metadata (interpreter, needed libs, rpath, soname, machine type) |
 | `elb` | Patch ELF binaries (set interpreter, set runpath) |
 | `petgraph` | Dependency graph with topological sort, cycle detection |
-| `redb` | Embedded key-value database (pure Rust, ACID) |
+| `redb` | Embedded key-value database (pure Rust, ACID). v4 — reads only the v3+ file format |
 | `clap` (derive) | CLI argument parsing (with `ValueEnum` for `SortOrder`) |
-| `reqwest` (blocking+json) | HTTP client |
+| `reqwest` (blocking+json) | HTTP client (rustls TLS backend by default) |
 | `tar` + `zstd` + `flate2` + `xz2` + `bzip2` + `ar` + `zip` | Archive formats |
-| `sha2` | SHA256 checksums |
+| `sha2` | SHA256 checksums — always via `core::verify::sha256_hex`, since sha2 0.11's digest output has no `LowerHex` impl |
 | `indicatif` + `dialoguer` | Progress bars and interactive prompts |
 | `console` | Colored terminal output |
 | `quick-xml` | RPM repodata XML parsing (dnf, zypper plugins) |
@@ -215,7 +217,7 @@ Each CLI command lives in `src/cli/<command>.rs` with a `pub fn handle(...)` fun
 
 - **Zero clippy warnings**: `cargo clippy -- -D warnings` passes clean
 - **Zero `cargo fmt` diff**: all code is formatted
-- **264 tests**: comprehensive coverage of core modules (conflicts, ELF, path mapping, DB, graph, transaction, verify, plugins, search scoring, system detection, cache dedup, run, doctor, size, history, why, RPM repodata, NAR, source filtering)
+- **281 tests**: comprehensive coverage of core modules (conflicts, ELF, path mapping, DB, graph, transaction, verify, plugins, search scoring, system detection, cache dedup, run, doctor, size, history, why, RPM repodata, NAR, source filtering)
 
 ### Naming conventions
 

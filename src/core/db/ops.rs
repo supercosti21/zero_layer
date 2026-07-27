@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use redb::{Database, ReadableTable};
+use redb::{Database, ReadableDatabase, ReadableTable};
 
 use super::schema::{DEPENDENCIES, FILE_OWNERS, HISTORY, LIB_INDEX, PACKAGES, PINNED, PLUGIN_META};
 use crate::core::graph::model::PackageNode;
@@ -13,8 +13,20 @@ pub struct ZlDatabase {
 impl ZlDatabase {
     /// Open (or create) the database at the given path
     pub fn open(path: &Path) -> ZlResult<Self> {
-        let db = Database::create(path)
-            .map_err(|e| ZlError::Config(format!("Failed to open database: {}", e)))?;
+        let db = Database::create(path).map_err(|e| match e {
+            // redb 3 dropped support for the v2 file format written by ZL
+            // <= 0.2.0, and there is no in-place migration path.
+            redb::DatabaseError::UpgradeRequired(version) => ZlError::Config(format!(
+                "The package database at {} uses the old redb file format v{}, \
+                 which this version of ZL cannot read.\n\
+                 hint: run `zl list` with an older ZL to note what you have installed, \
+                 then delete {} and reinstall those packages",
+                path.display(),
+                version,
+                path.display()
+            )),
+            other => ZlError::Config(format!("Failed to open database: {}", other)),
+        })?;
 
         // Ensure all tables exist by doing an initial write txn
         let txn = db

@@ -98,17 +98,10 @@ pub fn handle(args: DiffArgs, ctx: &AppContext) -> ZlResult<()> {
 
     if latest.installed_size > 0 {
         let delta = latest.installed_size as i64 - current_size as i64;
-        let delta_str = if delta > 0 {
-            format!("+{:.1} MB", delta as f64 / 1_000_000.0)
-        } else if delta < 0 {
-            format!("{:.1} MB", delta as f64 / 1_000_000.0)
-        } else {
-            "no change".to_string()
-        };
         println!(
             "  New size: {:.1} MB ({})",
             latest.installed_size as f64 / 1_000_000.0,
-            delta_str
+            format_size_delta(delta)
         );
     }
 
@@ -120,11 +113,31 @@ pub fn handle(args: DiffArgs, ctx: &AppContext) -> ZlResult<()> {
     Ok(())
 }
 
+/// Render an installed-size delta in MB, signed, or "no change" when identical.
+fn format_size_delta(delta: i64) -> String {
+    match delta {
+        0 => "no change".to_string(),
+        d if d > 0 => format!("+{:.1} MB", d as f64 / 1_000_000.0),
+        d => format!("{:.1} MB", d as f64 / 1_000_000.0),
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
-    fn test_placeholder() {
-        // Integration testing requires live plugin; unit tests are in individual modules
-        assert!(true);
+    fn test_format_size_delta_growth() {
+        assert_eq!(format_size_delta(2_500_000), "+2.5 MB");
+    }
+
+    #[test]
+    fn test_format_size_delta_shrink() {
+        assert_eq!(format_size_delta(-2_500_000), "-2.5 MB");
+    }
+
+    #[test]
+    fn test_format_size_delta_zero() {
+        assert_eq!(format_size_delta(0), "no change");
     }
 }

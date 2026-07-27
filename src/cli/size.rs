@@ -38,7 +38,7 @@ pub fn handle(args: SizeArgs, db: &ZlDatabase) -> ZlResult<()> {
         .collect();
 
     if args.sort {
-        entries.sort_by(|a, b| b.2.cmp(&a.2));
+        entries.sort_by_key(|e| std::cmp::Reverse(e.2));
     } else {
         entries.sort_by(|a, b| a.0.cmp(&b.0));
     }
@@ -96,7 +96,7 @@ fn show_single(name: &str, db: &ZlDatabase) -> ZlResult<()> {
         })
         .collect();
 
-    file_sizes.sort_by(|a, b| b.1.cmp(&a.1));
+    file_sizes.sort_by_key(|(_, size)| std::cmp::Reverse(*size));
 
     let total: u64 = file_sizes.iter().map(|(_, s)| s).sum();
 

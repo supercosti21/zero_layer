@@ -44,7 +44,9 @@ pub fn parse_primary_xml<R: Read>(reader: R) -> ZlResult<Vec<RpmEntry>> {
 
     let buf_reader = BufReader::new(reader);
     let mut xml = Reader::from_reader(buf_reader);
-    xml.config_mut().trim_text(true);
+    // Text is not trimmed per event: an entity reference splits character data
+    // into several events, and per-event trimming would eat the surrounding
+    // spaces. The accumulated value is trimmed once, on the closing tag.
 
     let mut entries = Vec::new();
     let mut buf = Vec::new();
@@ -66,6 +68,9 @@ pub fn parse_primary_xml<R: Read>(reader: R) -> ZlResult<Vec<RpmEntry>> {
         conflicts: Vec::new(),
     };
     let mut current_tag = String::new();
+    // quick-xml splits character data around entity references into several
+    // events, so text is accumulated here and flushed on the closing tag.
+    let mut text_buf = String::new();
     let mut in_requires = false;
     let mut in_provides = false;
     let mut in_conflicts = false;
@@ -97,9 +102,11 @@ pub fn parse_primary_xml<R: Read>(reader: R) -> ZlResult<Vec<RpmEntry>> {
                     }
                     "name" | "summary" | "description" | "arch" if in_package => {
                         current_tag = local;
+                        text_buf.clear();
                     }
                     "checksum" if in_package => {
                         current_tag = "checksum".to_string();
+                        text_buf.clear();
                         // Check if type="sha256"
                         checksum_is_sha256 = false;
                         for attr in e.attributes().flatten() {
@@ -122,6 +129,7 @@ pub fn parse_primary_xml<R: Read>(reader: R) -> ZlResult<Vec<RpmEntry>> {
                     }
                     _ => {
                         current_tag.clear();
+                        text_buf.clear();
                     }
                 }
             }
@@ -184,22 +192,49 @@ pub fn parse_primary_xml<R: Read>(reader: R) -> ZlResult<Vec<RpmEntry>> {
                 }
             }
             Ok(Event::Text(e)) => {
-                if !in_package {
+                if !in_package || current_tag.is_empty() {
                     continue;
                 }
-                let text = e.unescape().unwrap_or_default().to_string();
-                match current_tag.as_str() {
-                    "name" => current.name = text,
-                    "summary" => current.summary = text,
-                    "description" => current.description = text,
-                    "arch" => current.arch = text,
-                    "checksum" if checksum_is_sha256 => current.checksum = Some(text),
-                    _ => {}
+                text_buf.push_str(&e.xml10_content().unwrap_or_default());
+            }
+            Ok(Event::GeneralRef(e)) => {
+                if !in_package || current_tag.is_empty() {
+                    continue;
+                }
+                // Entity references are reported separately from text since
+                // quick-xml 0.38 and must be resolved by hand.
+                match e.resolve_char_ref() {
+                    Ok(Some(c)) => text_buf.push(c),
+                    _ => {
+                        if let Ok(name) = e.decode() {
+                            match name.as_ref() {
+                                "amp" => text_buf.push('&'),
+                                "lt" => text_buf.push('<'),
+                                "gt" => text_buf.push('>'),
+                                "quot" => text_buf.push('"'),
+                                "apos" => text_buf.push('\''),
+                                _ => {}
+                            }
+                        }
+                    }
                 }
             }
             Ok(Event::End(e)) => {
                 let name_ref = e.name();
                 let local = local_name(name_ref.as_ref());
+
+                if in_package && local == current_tag {
+                    let text = text_buf.trim().to_string();
+                    match current_tag.as_str() {
+                        "name" => current.name = text,
+                        "summary" => current.summary = text,
+                        "description" => current.description = text,
+                        "arch" => current.arch = text,
+                        "checksum" if checksum_is_sha256 => current.checksum = Some(text),
+                        _ => {}
+                    }
+                }
+
                 match local.as_str() {
                     "package" if in_package => {
                         // Use summary as description if description is empty
@@ -215,6 +250,7 @@ pub fn parse_primary_xml<R: Read>(reader: R) -> ZlResult<Vec<RpmEntry>> {
                     _ => {}
                 }
                 current_tag.clear();
+                text_buf.clear();
             }
             Err(e) => {
                 return Err(ZlError::Plugin {
@@ -280,6 +316,28 @@ mod tests {
         assert_eq!(e.checksum, Some("abc123".to_string()));
         assert_eq!(e.requires, vec!["glibc", "ncurses-libs"]);
         assert_eq!(e.provides, vec!["bash", "/bin/bash"]);
+    }
+
+    #[test]
+    fn test_parse_primary_xml_entity_references() {
+        // Entity refs split character data into several events; the parser must
+        // reassemble them instead of keeping only the last fragment.
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<metadata xmlns="http://linux.duke.edu/metadata/common" packages="1">
+  <package type="rpm">
+    <name>gtk3</name>
+    <arch>x86_64</arch>
+    <version epoch="0" ver="3.24.0" rel="1"/>
+    <summary>Widgets &amp; toolkit for X &lt;11&gt;</summary>
+    <description>Say &quot;hi&quot; &#65; &amp; goodbye</description>
+    <location href="Packages/g/gtk3.rpm"/>
+  </package>
+</metadata>"#;
+
+        let entries = parse_primary_xml(xml.as_bytes()).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].summary, "Widgets & toolkit for X <11>");
+        assert_eq!(entries[0].description, "Say \"hi\" A & goodbye");
     }
 
     #[test]

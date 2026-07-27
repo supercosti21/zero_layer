@@ -74,8 +74,7 @@ pub fn download(candidate: &PackageCandidate, dest_dir: &Path) -> ZlResult<PathB
 
         // Verify checksum if available
         if let Some(ref expected_sha256) = expected_checksum {
-            use sha2::{Digest, Sha256};
-            let actual = format!("{:x}", Sha256::digest(&bytes));
+            let actual = crate::core::verify::sha256_hex(&bytes);
             if actual != *expected_sha256 {
                 return Err(ZlError::ChecksumMismatch {
                     path: dest_path.clone(),
@@ -94,12 +93,8 @@ pub fn download(candidate: &PackageCandidate, dest_dir: &Path) -> ZlResult<PathB
 
 /// Verify SHA256 checksum of an existing file
 fn verify_checksum(path: &Path, expected: &str) -> bool {
-    use sha2::{Digest, Sha256};
     match std::fs::read(path) {
-        Ok(bytes) => {
-            let actual = format!("{:x}", Sha256::digest(&bytes));
-            actual == expected
-        }
+        Ok(bytes) => crate::core::verify::sha256_hex(&bytes) == expected,
         Err(_) => false,
     }
 }

@@ -24,17 +24,32 @@ impl VerifyResult {
     }
 }
 
+/// SHA256 of a byte slice as a lowercase hex string.
+///
+/// sha2 0.11 returns a `hybrid_array::Array`, which no longer implements
+/// `LowerHex`, so the hex encoding is done here once for the whole crate.
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    use std::fmt::Write;
+
+    Sha256::digest(bytes).iter().fold(
+        String::with_capacity(Sha256::output_size() * 2),
+        |mut hex, byte| {
+            let _ = write!(hex, "{:02x}", byte);
+            hex
+        },
+    )
+}
+
 /// Verify SHA256 checksum of a file
 pub fn verify_sha256(path: &Path, expected: &str) -> ZlResult<bool> {
     let bytes = std::fs::read(path)?;
-    let actual = format!("{:x}", Sha256::digest(&bytes));
-    Ok(actual == expected)
+    Ok(sha256_hex(&bytes) == expected)
 }
 
 /// Compute SHA256 of a file
 pub fn compute_sha256(path: &Path) -> ZlResult<String> {
     let bytes = std::fs::read(path)?;
-    Ok(format!("{:x}", Sha256::digest(&bytes)))
+    Ok(sha256_hex(&bytes))
 }
 
 /// Check if the system gpg binary is available
@@ -176,6 +191,29 @@ pub fn verify_package(
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn test_sha256_hex_known_vectors() {
+        assert_eq!(
+            sha256_hex(b""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        // Contains a 0x01 byte, so this also covers zero-padded nibbles
+        assert_eq!(
+            sha256_hex(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
+    #[test]
+    fn test_sha256_hex_is_lowercase_and_64_chars() {
+        let hex = sha256_hex(b"zero layer");
+        assert_eq!(hex.len(), 64);
+        assert!(
+            hex.chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_uppercase())
+        );
+    }
 
     #[test]
     fn test_verify_sha256_correct() {
