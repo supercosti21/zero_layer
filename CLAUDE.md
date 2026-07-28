@@ -33,7 +33,7 @@ These rules are **mandatory** for every Claude instance working on this repo.
 cargo build                  # Debug build
 cargo build --release        # Release build
 cargo run -- <subcommand>    # Run (e.g., cargo run -- install firefox)
-cargo test                   # Run all tests (335 tests: 152 bin + 183 lib)
+cargo test                   # Run all tests (349 tests: 190 bin + 159 lib)
 cargo test <name>            # Run a single test by name
 cargo test -- --nocapture    # Run tests with stdout visible
 cargo clippy                 # Lint
@@ -142,7 +142,7 @@ diagnosis for each. Check it before touching a plugin or claiming a source works
 - **`appimage`** — AppImageHub (feed.json + self-contained executables)
 - **`github`** — GitHub Releases (API + smart asset selection)
 
-Shared modules: `plugin/rpm/` (RPM repodata XML parsing + cpio extraction, used by dnf + zypper).
+Shared modules: `plugin/rpm/` (repodata XML parsing in `repodata.rs`, `repomd.xml` discovery + multi-format primary decompression in `repomd.rs`, cpio extraction in `extract.rs`, used by dnf + zypper).
 
 **Plugins must produce an FHS layout.** `create_bin_symlinks` links only what it finds in `core::path::FHS_BIN_DIRS` (`usr/bin`, `bin`, `sbin`, …), so a plugin that leaves executables anywhere else installs them without ever putting them on PATH — silently, since the install still reports success. Distro plugins get this for free; the `github` plugin normalizes explicitly in `normalize_archive_layout()` (unwrap a lone top-level directory, then move root-level ELF programs into `usr/bin`). Use the `FHS_BIN_DIRS` constant rather than a local copy.
 
@@ -222,7 +222,7 @@ Each CLI command lives in `src/cli/<command>.rs` with a `pub fn handle(...)` fun
 
 - **Zero clippy warnings**: `cargo clippy -- -D warnings` passes clean
 - **Zero `cargo fmt` diff**: all code is formatted
-- **335 tests**: comprehensive coverage of core modules (conflicts, ELF, path mapping, DB, graph, transaction, verify, plugins, search scoring, system detection, cache dedup, run, doctor, size, history, why, RPM repodata, NAR, source filtering)
+- **349 tests**: comprehensive coverage of core modules (conflicts, ELF, path mapping, DB, graph, transaction, verify, plugins, search scoring, system detection, cache dedup, run, doctor, size, history, why, RPM repodata + repomd, NAR, source filtering)
 
 ### Naming conventions
 
