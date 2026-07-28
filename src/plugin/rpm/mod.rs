@@ -2,3 +2,4 @@
 
 pub mod extract;
 pub mod repodata;
+pub mod repomd;

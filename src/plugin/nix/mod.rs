@@ -23,6 +23,17 @@ use crate::plugin::{ExtractedPackage, PackageCandidate, SourcePlugin};
 
 const CACHE_URL: &str = "https://cache.nixos.org";
 
+/// ElasticSearch mapping-schema version baked into the search.nixos.org index
+/// name (`latest-<version>-<channel>`). It is bumped whenever the backend
+/// re-indexes with a new schema; overridable via `[plugins.nix] index_version`.
+const DEFAULT_INDEX_VERSION: u32 = 50;
+
+/// Public read-only credentials the search.nixos.org web UI ships in its
+/// frontend bundle. The ElasticSearch backend rejects anonymous queries with
+/// 401, so these must be sent on every search.
+const SEARCH_USERNAME: &str = "aWVSALXpZv";
+const SEARCH_PASSWORD: &str = "X8gPHnzL52wFEekuxsfQ9cSh";
+
 #[derive(serde::Deserialize)]
 struct NixSearchResponse {
     hits: NixSearchHits,
@@ -49,6 +60,7 @@ struct NixPackageSource {
 
 pub struct NixPlugin {
     channel: String,
+    index_version: u32,
     cache_url: String,
     cache_dir: PathBuf,
     client: reqwest::blocking::Client,
@@ -58,6 +70,7 @@ impl Default for NixPlugin {
     fn default() -> Self {
         Self {
             channel: "nixos-unstable".to_string(),
+            index_version: DEFAULT_INDEX_VERSION,
             cache_url: CACHE_URL.to_string(),
             cache_dir: PathBuf::new(),
             client: reqwest::blocking::Client::builder()
@@ -75,9 +88,10 @@ impl NixPlugin {
     }
 
     fn search_api_url(&self) -> String {
-        // The search API URL includes the channel
+        // The index name is `latest-<mapping-schema-version>-<channel>`.
         format!(
-            "https://search.nixos.org/backend/latest-43-{channel}/_search",
+            "https://search.nixos.org/backend/latest-{version}-{channel}/_search",
+            version = self.index_version,
             channel = self.channel
         )
     }
@@ -100,6 +114,13 @@ impl SourcePlugin for NixPlugin {
 
         if let Some(channel) = config.extra.get("channel").and_then(|v| v.as_str()) {
             self.channel = channel.to_string();
+        }
+        if let Some(version) = config
+            .extra
+            .get("index_version")
+            .and_then(|v| v.as_integer())
+        {
+            self.index_version = version as u32;
         }
         if let Some(url) = config.extra.get("cache_url").and_then(|v| v.as_str()) {
             self.cache_url = url.to_string();
@@ -126,11 +147,7 @@ impl SourcePlugin for NixPlugin {
         let resp = self
             .client
             .post(&url)
-            .header("Content-Type", "application/json")
-            .header(
-                "Authorization",
-                "Basic YVdWU0FMWHBadjpYOGdQSG56TDUyd0ZFZWt0eHFHRg==",
-            )
+            .basic_auth(SEARCH_USERNAME, Some(SEARCH_PASSWORD))
             .json(&body)
             .send()
             .map_err(|e| ZlError::Plugin {
@@ -234,6 +251,14 @@ mod tests {
         let p = NixPlugin::new();
         let url = p.search_api_url();
         assert!(url.contains("nixos-unstable"));
+        assert!(url.contains("latest-50-"));
         assert!(url.contains("_search"));
+    }
+
+    #[test]
+    fn test_nix_index_version_override() {
+        let mut p = NixPlugin::new();
+        p.index_version = 51;
+        assert!(p.search_api_url().contains("latest-51-nixos-unstable"));
     }
 }

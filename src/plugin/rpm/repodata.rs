@@ -1,7 +1,6 @@
 //! Parse RPM repodata `primary.xml.gz` into package entries.
 
 use std::io::Read;
-use std::path::Path;
 
 use crate::error::{ZlError, ZlResult};
 
@@ -27,13 +26,6 @@ impl RpmEntry {
     pub fn evr(&self) -> String {
         format!("{}-{}", self.version, self.release)
     }
-}
-
-/// Parse a `primary.xml.gz` file into a list of RpmEntry.
-pub fn parse_primary_xml_gz(path: &Path) -> ZlResult<Vec<RpmEntry>> {
-    let file = std::fs::File::open(path)?;
-    let gz = flate2::read::GzDecoder::new(file);
-    parse_primary_xml(gz)
 }
 
 /// Parse primary.xml from a reader.

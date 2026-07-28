@@ -56,18 +56,8 @@ impl ZypperPlugin {
         Self::default()
     }
 
-    fn primary_xml_url(&self, repo: &str) -> String {
-        if self.release == "tumbleweed" {
-            format!(
-                "{}/tumbleweed/repo/{}/repodata/primary.xml.gz",
-                self.mirror, repo
-            )
-        } else {
-            format!(
-                "{}/distribution/leap/{}/repo/{}/repodata/primary.xml.gz",
-                self.mirror, self.release, repo
-            )
-        }
+    fn repomd_url(&self, repo: &str) -> String {
+        format!("{}/repodata/repomd.xml", self.base_url(repo))
     }
 
     fn base_url(&self, repo: &str) -> String {
@@ -202,46 +192,13 @@ impl SourcePlugin for ZypperPlugin {
         let mut all_entries = Vec::new();
 
         for repo in &self.repos {
-            let url = self.primary_xml_url(repo);
-            let cache_path = self.cache_dir.join(format!("{}-primary.xml.gz", repo));
-
-            tracing::info!("Zypper: syncing {} from {}", repo, url);
-
-            let resp = self
-                .client
-                .get(&url)
-                .send()
-                .map_err(|e| ZlError::DownloadFailed {
-                    url: url.clone(),
-                    attempts: 1,
-                    message: e.to_string(),
-                })?;
-
-            if !resp.status().is_success() {
-                tracing::warn!("Zypper: failed to sync {}: HTTP {}", repo, resp.status());
-                if cache_path.exists() {
-                    let entries = crate::plugin::rpm::repodata::parse_primary_xml_gz(&cache_path)?;
+            match self.sync_repo(repo) {
+                Ok(entries) => {
                     for e in entries {
                         all_entries.push((repo.clone(), e));
                     }
                 }
-                continue;
-            }
-
-            let bytes = resp.bytes().map_err(|e| ZlError::DownloadFailed {
-                url: url.clone(),
-                attempts: 1,
-                message: e.to_string(),
-            })?;
-
-            if !self.cache_dir.as_os_str().is_empty() {
-                let _ = std::fs::write(&cache_path, &bytes);
-            }
-
-            let gz = flate2::read::GzDecoder::new(std::io::Cursor::new(bytes));
-            let entries = crate::plugin::rpm::repodata::parse_primary_xml(gz)?;
-            for e in entries {
-                all_entries.push((repo.clone(), e));
+                Err(e) => tracing::warn!("Zypper: failed to sync {}: {}", repo, e),
             }
         }
 
@@ -250,6 +207,55 @@ impl SourcePlugin for ZypperPlugin {
 
         tracing::info!("Zypper: {} packages loaded", packages.len());
         Ok(())
+    }
+}
+
+impl ZypperPlugin {
+    /// Fetch and parse a single repo's primary metadata, discovering the
+    /// primary file through repomd.xml.
+    fn sync_repo(&self, repo: &str) -> ZlResult<Vec<RpmEntry>> {
+        use crate::plugin::rpm::repomd;
+
+        let repomd_url = self.repomd_url(repo);
+        tracing::info!("Zypper: syncing {} from {}", repo, repomd_url);
+
+        let repomd_bytes = self.get_bytes(&repomd_url)?;
+        let data = repomd::parse_repomd(std::io::Cursor::new(repomd_bytes))?;
+        let href = repomd::primary_href(&data).ok_or_else(|| ZlError::Plugin {
+            plugin: "zypper".into(),
+            message: format!("no primary metadata listed in repomd.xml for {}", repo),
+        })?;
+
+        let primary_url = format!("{}/{}", self.base_url(repo), href);
+        let primary_bytes = self.get_bytes(&primary_url)?;
+        repomd::parse_primary_by_href(&href, primary_bytes)
+    }
+
+    /// GET a URL, returning its body bytes or a DownloadFailed error.
+    fn get_bytes(&self, url: &str) -> ZlResult<Vec<u8>> {
+        let resp = self
+            .client
+            .get(url)
+            .send()
+            .map_err(|e| ZlError::DownloadFailed {
+                url: url.to_string(),
+                attempts: 1,
+                message: e.to_string(),
+            })?;
+        if !resp.status().is_success() {
+            return Err(ZlError::DownloadFailed {
+                url: url.to_string(),
+                attempts: 1,
+                message: format!("HTTP {}", resp.status()),
+            });
+        }
+        resp.bytes()
+            .map(|b| b.to_vec())
+            .map_err(|e| ZlError::DownloadFailed {
+                url: url.to_string(),
+                attempts: 1,
+                message: e.to_string(),
+            })
     }
 }
 
@@ -266,18 +272,19 @@ mod tests {
     }
 
     #[test]
-    fn test_zypper_primary_xml_url_tumbleweed() {
+    fn test_zypper_repomd_url_tumbleweed() {
         let p = ZypperPlugin::new();
-        let url = p.primary_xml_url("oss");
+        let url = p.repomd_url("oss");
         assert!(url.contains("tumbleweed"));
-        assert!(url.contains("primary.xml.gz"));
+        assert!(url.ends_with("repodata/repomd.xml"));
     }
 
     #[test]
-    fn test_zypper_primary_xml_url_leap() {
+    fn test_zypper_repomd_url_leap() {
         let mut p = ZypperPlugin::new();
         p.release = "15.5".to_string();
-        let url = p.primary_xml_url("oss");
+        let url = p.repomd_url("oss");
         assert!(url.contains("leap/15.5"));
+        assert!(url.ends_with("repodata/repomd.xml"));
     }
 }

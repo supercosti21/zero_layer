@@ -94,12 +94,20 @@ impl SourcePlugin for FlatpakPlugin {
     }
 
     fn search(&self, query: &str) -> ZlResult<Vec<PackageCandidate>> {
-        let url = format!("{}/search?q={}", FLATHUB_API, query);
+        // Flathub API v2 search is POST with a JSON body — a GET on this
+        // endpoint answers 405 Method Not Allowed.
+        let url = format!("{}/search", FLATHUB_API);
+        let body = serde_json::json!({ "query": query });
 
-        let resp = self.client.get(&url).send().map_err(|e| ZlError::Plugin {
-            plugin: "flatpak".into(),
-            message: format!("Flathub search failed: {}", e),
-        })?;
+        let resp = self
+            .client
+            .post(&url)
+            .json(&body)
+            .send()
+            .map_err(|e| ZlError::Plugin {
+                plugin: "flatpak".into(),
+                message: format!("Flathub search failed: {}", e),
+            })?;
 
         if !resp.status().is_success() {
             return Err(ZlError::Plugin {

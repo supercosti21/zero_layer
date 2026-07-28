@@ -3,7 +3,7 @@
 //! Config (~/.config/zl/config.toml):
 //! ```toml
 //! [plugins.portage]
-//! binhost = "https://distfiles.gentoo.org/releases/amd64/binpackages/17.1/x86-64"
+//! binhost = "https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64"
 //! arch = "amd64"
 //! ```
 //!
@@ -20,7 +20,9 @@ use crate::config::PluginConfig;
 use crate::error::{ZlError, ZlResult};
 use crate::plugin::{ExtractedPackage, PackageCandidate, SourcePlugin};
 
-const DEFAULT_BINHOST: &str = "https://distfiles.gentoo.org/releases/amd64/binpackages/17.1/x86-64";
+// Gentoo retired the 17.1 profiles; 23.0 is the current default. The binhost
+// path mirrors the profile version. Overridable via `[plugins.portage] binhost`.
+const DEFAULT_BINHOST: &str = "https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64";
 
 /// An entry from the Gentoo binhost Packages index.
 #[derive(Debug, Clone)]
@@ -457,6 +459,9 @@ mod tests {
         let p = PortagePlugin::new();
         assert_eq!(p.name(), "portage");
         assert_eq!(p.display_name(), "Gentoo Binhost (Portage)");
+        // Must target the current 23.0 profile, not the retired 17.1 layout.
+        assert!(p.binhost.contains("/23.0/"));
+        assert!(!p.binhost.contains("/17.1/"));
     }
 
     #[test]
