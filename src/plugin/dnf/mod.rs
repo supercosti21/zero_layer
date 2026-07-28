@@ -20,7 +20,9 @@ use crate::plugin::rpm::repodata::RpmEntry;
 use crate::plugin::{ExtractedPackage, PackageCandidate, SourcePlugin};
 
 const DEFAULT_MIRROR: &str = "https://dl.fedoraproject.org/pub/fedora/linux";
-const DEFAULT_RELEASE: &str = "40";
+// Fedora 40 is EOL and no longer on the mirrors; 43 is the current stable.
+// Overridable via `[plugins.dnf] release = "44"`.
+const DEFAULT_RELEASE: &str = "43";
 
 pub struct DnfPlugin {
     mirror: String,
@@ -55,22 +57,10 @@ impl DnfPlugin {
         Self::default()
     }
 
-    fn primary_xml_url(&self, repo: &str) -> String {
+    /// Repository root for a repo, without the trailing `/repodata/...`.
+    /// Primary hrefs from repomd.xml are relative to this.
+    fn repo_base_url(&self, repo: &str) -> String {
         if repo == "updates" {
-            format!(
-                "{}/updates/{}/Everything/{}/repodata/primary.xml.gz",
-                self.mirror, self.release, self.arch
-            )
-        } else {
-            format!(
-                "{}/releases/{}/Everything/{}/os/repodata/primary.xml.gz",
-                self.mirror, self.release, self.arch
-            )
-        }
-    }
-
-    fn entry_to_candidate(&self, entry: &RpmEntry, repo: &str) -> PackageCandidate {
-        let base_url = if repo == "updates" {
             format!(
                 "{}/updates/{}/Everything/{}",
                 self.mirror, self.release, self.arch
@@ -80,7 +70,15 @@ impl DnfPlugin {
                 "{}/releases/{}/Everything/{}/os",
                 self.mirror, self.release, self.arch
             )
-        };
+        }
+    }
+
+    fn repomd_url(&self, repo: &str) -> String {
+        format!("{}/repodata/repomd.xml", self.repo_base_url(repo))
+    }
+
+    fn entry_to_candidate(&self, entry: &RpmEntry, repo: &str) -> PackageCandidate {
+        let base_url = self.repo_base_url(repo);
 
         PackageCandidate {
             name: entry.name.clone(),
@@ -200,44 +198,10 @@ impl SourcePlugin for DnfPlugin {
         let mut all_entries = Vec::new();
 
         for repo in &self.repos {
-            let url = self.primary_xml_url(repo);
-            let cache_path = self.cache_dir.join(format!("{}-primary.xml.gz", repo));
-
-            tracing::info!("DNF: syncing {} from {}", repo, url);
-
-            let resp = self
-                .client
-                .get(&url)
-                .send()
-                .map_err(|e| ZlError::DownloadFailed {
-                    url: url.clone(),
-                    attempts: 1,
-                    message: e.to_string(),
-                })?;
-
-            if !resp.status().is_success() {
-                tracing::warn!("DNF: failed to sync {}: HTTP {}", repo, resp.status());
-                // Try cached version
-                if cache_path.exists() {
-                    let entries = crate::plugin::rpm::repodata::parse_primary_xml_gz(&cache_path)?;
-                    all_entries.extend(entries);
-                }
-                continue;
+            match self.sync_repo(repo) {
+                Ok(entries) => all_entries.extend(entries),
+                Err(e) => tracing::warn!("DNF: failed to sync {}: {}", repo, e),
             }
-
-            let bytes = resp.bytes().map_err(|e| ZlError::DownloadFailed {
-                url: url.clone(),
-                attempts: 1,
-                message: e.to_string(),
-            })?;
-
-            if !self.cache_dir.as_os_str().is_empty() {
-                let _ = std::fs::write(&cache_path, &bytes);
-            }
-
-            let gz = flate2::read::GzDecoder::new(std::io::Cursor::new(bytes));
-            let entries = crate::plugin::rpm::repodata::parse_primary_xml(gz)?;
-            all_entries.extend(entries);
         }
 
         let mut packages = self.packages.write().unwrap();
@@ -245,6 +209,55 @@ impl SourcePlugin for DnfPlugin {
 
         tracing::info!("DNF: {} packages loaded", packages.len());
         Ok(())
+    }
+}
+
+impl DnfPlugin {
+    /// Fetch and parse a single repo's primary metadata, discovering the
+    /// primary file through repomd.xml.
+    fn sync_repo(&self, repo: &str) -> ZlResult<Vec<RpmEntry>> {
+        use crate::plugin::rpm::repomd;
+
+        let repomd_url = self.repomd_url(repo);
+        tracing::info!("DNF: syncing {} from {}", repo, repomd_url);
+
+        let repomd_bytes = self.get_bytes(&repomd_url)?;
+        let data = repomd::parse_repomd(std::io::Cursor::new(repomd_bytes))?;
+        let href = repomd::primary_href(&data).ok_or_else(|| ZlError::Plugin {
+            plugin: "dnf".into(),
+            message: format!("no primary metadata listed in repomd.xml for {}", repo),
+        })?;
+
+        let primary_url = format!("{}/{}", self.repo_base_url(repo), href);
+        let primary_bytes = self.get_bytes(&primary_url)?;
+        repomd::parse_primary_by_href(&href, primary_bytes)
+    }
+
+    /// GET a URL, returning its body bytes or a DownloadFailed error.
+    fn get_bytes(&self, url: &str) -> ZlResult<Vec<u8>> {
+        let resp = self
+            .client
+            .get(url)
+            .send()
+            .map_err(|e| ZlError::DownloadFailed {
+                url: url.to_string(),
+                attempts: 1,
+                message: e.to_string(),
+            })?;
+        if !resp.status().is_success() {
+            return Err(ZlError::DownloadFailed {
+                url: url.to_string(),
+                attempts: 1,
+                message: format!("HTTP {}", resp.status()),
+            });
+        }
+        resp.bytes()
+            .map(|b| b.to_vec())
+            .map_err(|e| ZlError::DownloadFailed {
+                url: url.to_string(),
+                attempts: 1,
+                message: e.to_string(),
+            })
     }
 }
 
@@ -335,11 +348,20 @@ mod tests {
     }
 
     #[test]
-    fn test_dnf_primary_xml_url() {
+    fn test_dnf_repomd_url() {
         let p = DnfPlugin::new();
-        let url = p.primary_xml_url("fedora");
-        assert!(url.contains("primary.xml.gz"));
+        let url = p.repomd_url("fedora");
+        assert!(url.contains("repodata/repomd.xml"));
         assert!(url.contains("releases"));
+        assert!(url.contains("/43/")); // current release, not EOL 40
+    }
+
+    #[test]
+    fn test_dnf_updates_repo_base() {
+        let p = DnfPlugin::new();
+        let url = p.repomd_url("updates");
+        assert!(url.contains("/updates/"));
+        assert!(url.ends_with("repodata/repomd.xml"));
     }
 
     #[test]
