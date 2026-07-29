@@ -53,7 +53,7 @@
   "operatingSystem": "Linux",
   "url": "https://supercosti21.github.io/zero_layer/",
   "downloadUrl": "https://github.com/supercosti21/zero_layer/releases/latest",
-  "softwareVersion": "0.1.0",
+  "softwareVersion": "0.3.0",
   "programmingLanguage": "Rust",
   "license": "https://opensource.org/licenses/MIT",
   "codeRepository": "https://github.com/supercosti21/zero_layer",
@@ -602,25 +602,27 @@
             <p class="sec-lede" data-i18n="start_lede">One download, one line in your shell profile. No package manager needed to install the package manager.</p>
         </div>
 
-        <div class="notice reveal" style="margin-bottom:var(--sp-6)">
-            <span class="notice-ico" aria-hidden="true">▲</span>
+        <div class="notice notice-ok reveal" style="margin-bottom:var(--sp-6)">
+            <span class="notice-ico" aria-hidden="true">✓</span>
             <span>
-                <span data-i18n="rel_notice">The latest published release is <strong>v0.1.0</strong> and ships 4 sources. Everything described on this page lives on the main branch — build from source for the full set.</span>
-                <a href="https://github.com/supercosti21/zero_layer#build-from-source" target="_blank" rel="noopener" data-i18n="rel_notice_link">Build from source</a> →
+                <span data-i18n="rel_notice"><strong>v0.3.0</strong> is published, with prebuilt binaries for x86_64 and aarch64. Everything described on this page ships in it — no compiler needed.</span>
+                <a href="https://github.com/supercosti21/zero_layer/releases/latest" target="_blank" rel="noopener" data-i18n="rel_notice_link">Release notes</a> →
             </span>
         </div>
 
         <div style="display:grid;gap:var(--sp-6)">
             <div class="start-step reveal">
                 <h3><span class="num">1</span><span data-i18n="s1_t">Install the binary</span></h3>
-                <p style="font-size:0.92rem" data-i18n="s1_d">Grab the latest release. Use the second form if you would rather not use sudo.</p>
+                <p style="font-size:0.92rem" data-i18n="s1_d">Grab the latest release for your architecture. Use the second form if you would rather not use sudo.</p>
                 <div class="codeblock">
                     <button class="copy-btn" type="button" data-copy-target="#code-1"><span data-i18n="copy">Copy</span></button>
 <pre id="code-1"><span class="c-prompt">$</span> <span class="c-cmd">curl -Lo zl https://github.com/supercosti21/zero_layer/releases/latest/download/zl-x86_64-unknown-linux-gnu</span>
 <span class="c-prompt">$</span> <span class="c-cmd">chmod +x zl &amp;&amp; sudo mv zl /usr/local/bin/</span>
 
 <span class="c-note"># or, without sudo:</span>
-<span class="c-prompt">$</span> <span class="c-cmd">mkdir -p ~/.local/bin &amp;&amp; mv zl ~/.local/bin/</span></pre>
+<span class="c-prompt">$</span> <span class="c-cmd">mkdir -p ~/.local/bin &amp;&amp; mv zl ~/.local/bin/</span>
+
+<span class="c-note"># other builds: zl-x86_64-unknown-linux-musl, zl-aarch64-unknown-linux-musl</span></pre>
                 </div>
             </div>
 
@@ -717,11 +719,11 @@
                     <span data-i18n="cta_b2">Star on GitHub</span>
                 </a>
             </div>
-            <div class="notice notice-inline">
-                <span class="notice-ico" aria-hidden="true">▲</span>
+            <div class="notice notice-ok notice-inline">
+                <span class="notice-ico" aria-hidden="true">✓</span>
                 <span>
-                    <span data-i18n="rel_notice">The latest published release is <strong>v0.1.0</strong> and ships 4 sources.</span>
-                    <a href="https://github.com/supercosti21/zero_layer#build-from-source" target="_blank" rel="noopener" data-i18n="rel_notice_link">Build from source</a> →
+                    <span data-i18n="rel_notice"><strong>v0.3.0</strong> is published, with prebuilt binaries for x86_64 and aarch64.</span>
+                    <a href="https://github.com/supercosti21/zero_layer/releases/latest" target="_blank" rel="noopener" data-i18n="rel_notice_link">Release notes</a> →
                 </span>
             </div>
         </div>

@@ -878,6 +878,16 @@ table.compare thead .col-zl { background: rgba(124, 91, 240, 0.2); color: var(--
     max-width: 620px;
     margin: var(--sp-5) auto 0;
 }
+/* Green variant, for good news rather than caveats. */
+.notice-ok {
+    background: rgba(52, 211, 153, 0.07);
+    border-color: rgba(52, 211, 153, 0.30);
+}
+.notice-ok .notice-ico { color: var(--green); }
+:root[data-theme="light"] .notice-ok {
+    background: rgba(15, 157, 112, 0.07);
+    border-color: rgba(15, 157, 112, 0.28);
+}
 
 /* --------------------------------------------------------------------------
    16. FAQ
