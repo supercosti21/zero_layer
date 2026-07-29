@@ -237,6 +237,44 @@ Each CLI command lives in `src/cli/<command>.rs` with a `pub fn handle(...)` fun
 - `ArchMismatch` error variant has `#[allow(dead_code)]` — available for strict arch enforcement in future
 - `PluginInfo`, `fetch_remote_registry`, `list_info` have `#[allow(dead_code)]` — scaffolding for remote plugin marketplace
 
+## Project site (`docs/site/`)
+
+The landing page published at `https://supercosti21.github.io/zero_layer/`.
+Deployed by `.github/workflows/pages.yml`, which runs **only on push to `main`**
+touching `docs/site/**`. A merge that lands on `main` is what makes it live.
+
+```
+docs/site/
+  index.html                  semantic markup only — no inline <style>/<script> blocks
+  assets/css/styles.css       design system: tokens, components, responsive, motion
+  assets/js/i18n.js           all five translations in one object
+  assets/js/main.js           theme, language, nav, tabs, copy, terminal demo, reveals
+  assets/og-image.src.html    source for og-image.png
+  og-image.png                1200x630 social preview
+```
+
+Conventions to preserve when editing:
+
+- **Dark is the base theme.** It loads unless the visitor previously chose light;
+  `prefers-color-scheme` does *not* flip the default. The theme is set by an
+  inline script in `<head>` before paint, so changing it elsewhere reintroduces
+  a flash of the wrong theme.
+- **i18n** is `data-i18n="key"` on the element, with English as the per-key
+  fallback. Keys whose value contains markup must be listed in the innerHTML
+  branch of `translate()` in `main.js` (currently `*_p1`, `*_p2`, `*_html`,
+  `a<N>` and `rel_notice`) — otherwise the tags render as literal text.
+  Attributes are translated via `data-i18n-attr="aria-label:key"`.
+- **Regenerate `og-image.png`** by screenshotting `assets/og-image.src.html` at
+  1200x630 (e.g. `npx playwright screenshot --viewport-size=1200,630 ...`).
+- **Keep the release notice honest.** The page describes what is on `main`
+  (13 sources, 349 tests), while the published release is older. The `rel_notice`
+  key in all five languages and `softwareVersion` in the JSON-LD block state the
+  published version — update both when a new release is tagged, and drop the
+  notice once the release matches the page.
+- Verify changes by rendering the page (headless Chromium is available): no JS
+  errors, language switching updates every section, no horizontal overflow from
+  320px up, tap targets >= 40px, and WCAG AA text contrast in both themes.
+
 ## GitHub Metadata
 
 Keep the repository description and topics in sync with the project state. Update them whenever features, scope, or tech stack change significantly.
