@@ -266,11 +266,15 @@ Conventions to preserve when editing:
   Attributes are translated via `data-i18n-attr="aria-label:key"`.
 - **Regenerate `og-image.png`** by screenshotting `assets/og-image.src.html` at
   1200x630 (e.g. `npx playwright screenshot --viewport-size=1200,630 ...`).
-- **Keep the release notice honest.** The page describes what is on `main`
-  (13 sources, 349 tests), while the published release is older. The `rel_notice`
-  key in all five languages and `softwareVersion` in the JSON-LD block state the
-  published version — update both when a new release is tagged, and drop the
-  notice once the release matches the page.
+- **Keep the release notice honest.** As of v0.3.0 the published release matches
+  the page (13 sources, 349 tests) and the notice says so — prebuilt binaries,
+  no compiler needed. It uses the green `.notice-ok` variant. The `rel_notice`
+  key in all five languages, the two inline fallbacks in `index.html`, and
+  `softwareVersion` in the JSON-LD block all name the published version: update
+  every one of them when a new release is tagged, and turn the notice back into
+  a caveat (drop `notice-ok`) if `main` ever runs ahead of the release again.
+  The release assets the page points at are `zl-x86_64-unknown-linux-gnu`
+  (hero + step 1), plus the musl and aarch64 builds named in step 1's comment.
 - Verify changes by rendering the page (headless Chromium is available): no JS
   errors, language switching updates every section, no horizontal overflow from
   320px up, tap targets >= 40px, and WCAG AA text contrast in both themes.
