@@ -44,8 +44,8 @@
             var key = el.getAttribute('data-i18n');
             var value = dict[key] !== undefined ? dict[key] : fallback[key];
             if (value === undefined) return;
-            // Keys ending in _html may carry inline markup (<strong>, <code>).
-            if (/_(p1|p2|html)$/.test(key) || /^a[0-9]+$/.test(key)) el.innerHTML = value;
+            // These keys carry inline markup (<strong>, <code>); the rest is plain text.
+            if (/_(p1|p2|html)$/.test(key) || /^a[0-9]+$/.test(key) || key === 'rel_notice') el.innerHTML = value;
             else el.textContent = value;
         });
 

@@ -857,6 +857,28 @@ table.compare thead .col-zl { background: rgba(124, 91, 240, 0.2); color: var(--
     font-weight: 700;
 }
 
+/* Release notice — the published binary trails what this page describes */
+.notice {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--sp-3);
+    padding: 14px 18px;
+    border-radius: var(--r-md);
+    background: rgba(251, 191, 36, 0.07);
+    border: 1px solid rgba(251, 191, 36, 0.28);
+    font-size: 0.87rem;
+    line-height: 1.6;
+    color: var(--text-2);
+    text-align: left;
+}
+.notice .notice-ico { color: var(--yellow); flex-shrink: 0; font-size: 1rem; line-height: 1.5; }
+.notice a { color: var(--brand-2); text-decoration: none; font-weight: 600; }
+.notice a:hover { text-decoration: underline; }
+.notice-inline {
+    max-width: 620px;
+    margin: var(--sp-5) auto 0;
+}
+
 /* --------------------------------------------------------------------------
    16. FAQ
    -------------------------------------------------------------------------- */
